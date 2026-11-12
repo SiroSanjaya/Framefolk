@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.8.0",
+    "@elevenlabs/elevenlabs-js": "^2.77.0",
     "@remotion/player": "4.0.542",
     "busboy": "^1.6.0",
     "lucide-react": "1.7.0",

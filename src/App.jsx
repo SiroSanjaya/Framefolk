@@ -68,6 +68,26 @@ const DEFAULT_PROJECT = {
 };
 
 const STORY_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
+const IMAGE_GENERATION_REFERENCE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+const SCENE_MOTION_STYLES = ["kinetic-type", "orbit", "depth", "burst", "diagram", "fluid"];
+const SCENE_MOTION_LABELS = {
+  "kinetic-type": "Kinetic type",
+  orbit: "Orbit",
+  depth: "Pseudo-3D depth",
+  burst: "Burst",
+  diagram: "Diagram",
+  fluid: "Fluid",
+};
+const SCENE_MOTION_DIRECTIONS = ["left", "right", "up", "down", "center"];
+const SCENE_MOTION_TEMPOS = ["deliberate", "steady", "rapid"];
+const SCENE_MOTION_ENTRANCES = ["slam", "wipe", "orbit", "unfold", "rise"];
+const SCENE_MOTION_ENTRANCE_LABELS = {
+  slam: "Impact",
+  wipe: "Sweep",
+  orbit: "Orbit",
+  unfold: "Unfold",
+  rise: "Rise",
+};
 const QUICK_REVISIONS = [
   { label: "Lebih lucu", instruction: "Bikin lebih lucu dan lincah, tetap natural dan konsisten dengan karakter." },
   { label: "Lebih emosional", instruction: "Bikin lebih emosional dan menyentuh, tanpa jadi berlebihan." },
@@ -125,6 +145,10 @@ const STARTER_TEMPLATES = [
 ];
 
 const countWords = (text) => text.trim().split(/\s+/).filter(Boolean).length;
+const getMotionText = (text) => {
+  const phrase = (text || "").trim().split(/\s+/).slice(0, 3).join(" ");
+  return phrase.length > 48 ? `${phrase.slice(0, 45).trimEnd()}...` : phrase;
+};
 const estimateSpeechDuration = (text) => Math.max(0.5, (countWords(text) * 60) / 155);
 const sceneActiveDuration = (scene) =>
   Math.max(
@@ -181,6 +205,13 @@ const createScenesFromScript = (script) => {
       visualDescription: "Pilih aset visual dan layout yang paling sesuai dengan bagian naskah ini.",
       visualType: layouts[index % layouts.length],
       motionPreset: motions[index % motions.length],
+      motionStyle: SCENE_MOTION_STYLES[index % SCENE_MOTION_STYLES.length],
+      motionIntensity: 2,
+      motionText: getMotionText(onScreenText),
+      motionEmphasis: onScreenText.split(/\s+/)[0] || "Fokus",
+      motionDirection: SCENE_MOTION_DIRECTIONS[index % SCENE_MOTION_DIRECTIONS.length],
+      motionTempo: "steady",
+      motionEntrance: SCENE_MOTION_ENTRANCES[index % SCENE_MOTION_ENTRANCES.length],
       durationSeconds: estimateSpeechDuration(narration),
       pauseAfterSeconds: index < groups.length - 1 ? 0.3 : 0,
       voiceAssetId: "",
@@ -263,6 +294,9 @@ const App = () => {
   const [error, setError] = useState("");
   const [renderJob, setRenderJob] = useState(null);
   const [generatingStory, setGeneratingStory] = useState(false);
+  const [generatingMotion, setGeneratingMotion] = useState(false);
+  const [generatingImages, setGeneratingImages] = useState(false);
+  const [imageProgress, setImageProgress] = useState(null);
   const [revisingStory, setRevisingStory] = useState(false);
   const [revisionTarget, setRevisionTarget] = useState("all");
   const [revisionInstruction, setRevisionInstruction] = useState("");
@@ -446,6 +480,7 @@ const App = () => {
       return segment;
     });
   }, [project.scenes]);
+  const missingSceneImageCount = project.scenes.filter((scene) => !scene.visualAssetId).length;
   const timelineDurationSeconds = project.scenes.length
     ? Math.max(1, Math.ceil(getTimelineDuration(project.scenes)))
     : Number(project.durationSeconds);
@@ -514,7 +549,7 @@ const App = () => {
     ) {
       checks.push({
         level: "info",
-        message: "Belum ada gambar/video unggahan. Preview tetap memakai ilustrasi vektor otomatis berdasarkan tema tiap adegan; tambahkan aset sendiri jika butuh orang, lokasi, atau produk yang spesifik.",
+        message: "Belum ada visual adegan. Generate gambar AI per adegan atau pilih aset sendiri agar cerita punya visual yang spesifik.",
       });
     }
     if (project.goal === "promotion" && !project.callToAction.trim()) {
@@ -553,7 +588,7 @@ const App = () => {
   );
 
   const regenerateSceneSpeech = async (scene) => {
-    if (generatingSpeech) return;
+    if (generatingImages || generatingSpeech) return;
     if (!scene.narration.trim()) {
       setError("Isi narasi adegan dulu sebelum generate voice-over.");
       return;
@@ -761,6 +796,13 @@ INSTRUKSI
       ...scene,
       visualType: scene.visualType || "hero",
       motionPreset: scene.motionPreset || "rise",
+      motionStyle: scene.motionStyle || SCENE_MOTION_STYLES[index % SCENE_MOTION_STYLES.length],
+      motionIntensity: scene.motionIntensity || 2,
+      motionText: scene.motionText || getMotionText(scene.onScreenText),
+      motionEmphasis: scene.motionEmphasis || scene.onScreenText.split(/\s+/)[0] || "Fokus",
+      motionDirection: scene.motionDirection || SCENE_MOTION_DIRECTIONS[index % SCENE_MOTION_DIRECTIONS.length],
+      motionTempo: scene.motionTempo || "steady",
+      motionEntrance: scene.motionEntrance || SCENE_MOTION_ENTRANCES[index % SCENE_MOTION_ENTRANCES.length],
       durationSeconds: estimateSpeechDuration(scene.narration),
       pauseAfterSeconds: index < list.length - 1 ? 0.35 : 0,
       voiceAssetId: "",
@@ -873,8 +915,191 @@ INSTRUKSI
     setSpeechProgress({ completed, total: scenes.length });
   };
 
+  const generateSceneMotion = async () => {
+    if (generatingImages || generatingMotion || generatingStory || generatingSpeech || project.scenes.length < 2) return;
+    setGeneratingMotion(true);
+    setError("");
+    setNotice("");
+    try {
+      const response = await fetch("/api/ai/motion", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          scenes: project.scenes.map(({ id, label, onScreenText, narration, visualDescription }) => ({
+            id,
+            label,
+            onScreenText,
+            narration,
+            visualDescription,
+          })),
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "AI gagal merancang motion adegan.");
+      if (!Array.isArray(result.scenes) || result.scenes.length !== project.scenes.length) {
+        throw new Error("AI tidak mengembalikan motion untuk semua adegan. Coba lagi.");
+      }
+      const motionById = new Map(result.scenes.map((scene) => [scene.sceneId, scene]));
+      if (project.scenes.some((scene) => !motionById.has(scene.id))) {
+        throw new Error("Respons AI tidak cocok dengan urutan adegan sekarang. Coba lagi.");
+      }
+      setProject((current) => ({
+        ...current,
+        scenes: current.scenes.map((scene) => {
+          const motion = motionById.get(scene.id);
+          return {
+            ...scene,
+            motionStyle: motion.motionStyle,
+            motionIntensity: motion.motionIntensity,
+            motionText: motion.motionText,
+            motionEmphasis: motion.motionEmphasis,
+            motionDirection: motion.motionDirection,
+            motionTempo: motion.motionTempo,
+            motionEntrance: motion.motionEntrance,
+          };
+        }),
+      }));
+      setNotice(`Motion graphics ${result.scenes.length} adegan dirancang AI. Naskah dan voice-over tetap sama.`);
+    } catch (motionError) {
+      console.error("Could not design motion graphics for the scenes.", motionError);
+      setError(motionError.message || "AI gagal merancang motion. Coba lagi.");
+    } finally {
+      setGeneratingMotion(false);
+    }
+  };
+
+  const generateSceneImages = async (sceneIds) => {
+    if (generatingImages || generatingStory || generatingSpeech || generatingMotion) return;
+    const requestedIds = new Set(sceneIds);
+    const scenes = project.scenes.filter((scene) => requestedIds.has(scene.id));
+    if (scenes.length === 0) return;
+    if (scenes.some((scene) => !scene.narration.trim() || !scene.visualDescription.trim())) {
+      setError("Isi narasi dan arahan visual untuk tiap adegan sebelum membuat gambar.");
+      return;
+    }
+
+    setGeneratingImages(true);
+    setError("");
+    setNotice("");
+    setImageProgress({ completed: 0, total: scenes.length, activeSceneId: scenes[0]?.id });
+    let completed = 0;
+    let failure = null;
+    try {
+      const characterImage = assets.find(
+        (asset) => asset.id === project.characterAssetId && IMAGE_GENERATION_REFERENCE_TYPES.has(asset.type),
+      );
+      if (
+        project.characterAssetId &&
+        !characterImage &&
+        !assets.some((asset) => asset.id === project.characterAssetId)
+      ) {
+        throw new Error("Gambar referensi karakter tidak ditemukan di library. Pilih ulang gambar karakter.");
+      }
+      if (characterImage?.size > 5 * 1024 * 1024) {
+        throw new Error("Gambar referensi karakter harus maksimal 5 MB untuk dikirim ke Gemini Image.");
+      }
+      let continuityReference = characterImage
+        ? {
+            mediaType: characterImage.type,
+            data: await blobToBase64(characterImage.blob),
+          }
+        : null;
+      if (!continuityReference) {
+        const generatedReference = project.scenes
+          .map((scene) => assets.find((asset) => asset.id === scene.visualAssetId && asset.generatedBy === "gemini-image"))
+          .find(Boolean);
+        if (generatedReference) {
+          continuityReference = {
+            mediaType: generatedReference.type,
+            data: await blobToBase64(generatedReference.blob),
+          };
+        }
+      }
+
+      for (const scene of scenes) {
+        setImageProgress({ completed, total: scenes.length, activeSceneId: scene.id });
+        setNotice(`Membuat gambar AI adegan ${completed + 1} dari ${scenes.length}...`);
+        const response = await fetch("/api/ai/scene-image", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            scene: {
+              id: scene.id,
+              label: scene.label,
+              narration: scene.narration,
+              onScreenText: scene.onScreenText,
+              visualDescription: scene.visualDescription,
+            },
+            character: {
+              name: project.characterName,
+              description: project.characterDescription,
+              traits: project.characterTraits,
+            },
+            format: project.format,
+            visualStyle: project.visualStyle,
+            referenceImage: continuityReference,
+          }),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || "Gemini gagal membuat gambar adegan.");
+        if (
+          result.sceneId !== scene.id ||
+          typeof result.imageBase64 !== "string" ||
+          !IMAGE_GENERATION_REFERENCE_TYPES.has(result.mimeType)
+        ) {
+          throw new Error("Respons Gemini tidak berisi gambar valid untuk adegan ini.");
+        }
+        const imageBytes = Uint8Array.from(atob(result.imageBase64), (character) => character.charCodeAt(0));
+        if (imageBytes.length === 0 || imageBytes.length > 12 * 1024 * 1024) {
+          throw new Error("Ukuran gambar Gemini kosong atau melebihi batas 12 MB.");
+        }
+        const blob = new Blob([imageBytes], { type: result.mimeType });
+        const asset = {
+          id: crypto.randomUUID(),
+          name: `Visual AI · ${scene.label || `Adegan ${completed + 1}`} · ${new Date().toLocaleString("id-ID")}`,
+          type: result.mimeType,
+          size: blob.size,
+          blob,
+          addedAt: Date.now(),
+          generatedBy: "gemini-image",
+          sceneId: scene.id,
+        };
+        await saveAsset(asset);
+        setAssets((current) => [asset, ...current]);
+        setProject((current) => ({
+          ...current,
+          scenes: current.scenes.map((currentScene) =>
+            currentScene.id === scene.id
+              ? { ...currentScene, visualAssetId: asset.id }
+              : currentScene,
+          ),
+        }));
+        if (blob.size <= 5 * 1024 * 1024) {
+          continuityReference = {
+            mediaType: result.mimeType,
+            data: result.imageBase64,
+          };
+        }
+        completed += 1;
+      }
+      setNotice(`${completed} gambar AI selesai dan sudah dipasang ke adegan. Preview bisa langsung diedit.`);
+    } catch (imageError) {
+      failure = imageError;
+      console.error("Could not generate scene images.", imageError);
+      setError(
+        completed > 0
+          ? `${completed} gambar tersimpan, lalu generasi berhenti: ${imageError.message}`
+          : imageError.message || "Gemini gagal membuat gambar adegan.",
+      );
+    } finally {
+      setGeneratingImages(false);
+      setImageProgress(null);
+      if (failure) setNotice("");
+    }
+  };
+
   const generateStory = async ({ withVoice = false } = {}) => {
-    if (generatingStory) return;
+    if (generatingImages || generatingStory || generatingMotion) return;
     setGeneratingStory(true);
     setError("");
     setNotice("");
@@ -910,7 +1135,7 @@ INSTRUKSI
       setError("Tulis atau tempel naskah dulu sebelum menyusun adegan.");
       return;
     }
-    if (generatingStory || generatingSpeech) return;
+    if (generatingImages || generatingStory || generatingSpeech || generatingMotion) return;
 
     const scenes = createScenesFromScript(script);
     if (scenes.length === 0 || scenes.length > 12) {
@@ -948,7 +1173,7 @@ INSTRUKSI
   };
 
   const reviseStory = async (instruction, targetSceneIndex = null) => {
-    if (revisingStory || generatingStory || project.scenes.length < 2) return;
+    if (generatingImages || revisingStory || generatingStory || generatingMotion || project.scenes.length < 2) return;
     setRevisingStory(true);
     setError("");
     setNotice("");
@@ -1020,7 +1245,7 @@ INSTRUKSI
   };
 
   const generateSpeech = async () => {
-    if (generatingSpeech) return;
+    if (generatingImages || generatingSpeech) return;
     if (!project.narration.trim()) {
       setError("Bikin cerita dengan Gemini dulu atau tulis naskah voice-over sebelum generate.");
       return;
@@ -1230,7 +1455,7 @@ INSTRUKSI
           <button className="button button-quiet" onClick={() => setPromptVisible((visible) => !visible)}>
             <MessageSquareText size={16} /> {promptVisible ? "Sembunyikan prompt manual" : "Prompt manual"}
           </button>
-          <button className="button button-primary" onClick={() => generateStory({ withVoice: true })} disabled={generatingStory || generatingSpeech || !loaded}>
+          <button className="button button-primary" onClick={() => generateStory({ withVoice: true })} disabled={generatingImages || generatingStory || generatingMotion || generatingSpeech || !loaded}>
             {generatingStory ? <LoaderCircle className="loading-spinner-icon" size={16} /> : <WandSparkles size={16} />}
             {generatingStory ? "Bikin draft + suara..." : "Bikin draft + voice-over"}
           </button>
@@ -1259,6 +1484,12 @@ INSTRUKSI
           <strong>Setup satu kali:</strong> buat <code>.env.local</code>, isi API key
           {aiStatus.aiConfigured ? null : ` ${aiStatus.aiProvider === "anthropic" ? "Anthropic" : "Gemini"}`}{!aiStatus.aiConfigured && !aiStatus.elevenLabsConfigured ? " dan" : ""}
           {aiStatus.elevenLabsConfigured ? null : " ElevenLabs"}, lalu restart <code>npm run dev</code>. Key hanya dibaca server lokal.
+        </div>
+      )}
+
+      {aiStatus && !aiStatus.unavailable && !aiStatus.geminiImageConfigured && (
+        <div className="api-setup-note">
+          <strong>Gambar AI adegan belum siap:</strong> isi <code>GEMINI_API_KEY</code> di <code>.env.local</code>, lalu restart <code>npm run dev</code>. Pengaturan gambar ini memakai Gemini, terpisah dari provider teks.
         </div>
       )}
 
@@ -1538,7 +1769,7 @@ INSTRUKSI
               <button
                 className="button button-primary button-small"
                 onClick={() => generateStory({ withVoice: true })}
-                disabled={generatingStory || generatingSpeech || !loaded}
+                disabled={generatingImages || generatingStory || generatingMotion || generatingSpeech || !loaded}
               >
                 {generatingStory || generatingSpeech ? <LoaderCircle className="loading-spinner-icon" size={14} /> : <WandSparkles size={14} />}
                 {generatingStory ? "Gemini bikin cerita..." : generatingSpeech ? "Bikin voice-over..." : "Buat cerita + suara"}
@@ -1563,7 +1794,7 @@ INSTRUKSI
                     type="button"
                     className="button button-quiet"
                     onClick={() => createOwnScriptScenes()}
-                    disabled={generatingSpeech || generatingStory || !project.narration.trim()}
+                    disabled={generatingImages || generatingSpeech || generatingStory || generatingMotion || !project.narration.trim()}
                   >
                     <Clapperboard size={14} /> Susun adegan dulu
                   </button>
@@ -1571,7 +1802,7 @@ INSTRUKSI
                     type="button"
                     className="button button-primary"
                     onClick={() => createOwnScriptScenes({ withVoice: true })}
-                    disabled={generatingSpeech || generatingStory || !project.narration.trim()}
+                    disabled={generatingImages || generatingSpeech || generatingStory || generatingMotion || !project.narration.trim()}
                   >
                     {generatingSpeech ? <LoaderCircle className="loading-spinner-icon" size={14} /> : <Mic2 size={14} />}
                     {generatingSpeech ? "Bikin voice per adegan..." : "Susun adegan + buat suara"}
@@ -1737,7 +1968,7 @@ INSTRUKSI
                 <button
                   className="button button-quiet button-small"
                   onClick={() => project.creationMode === "script" ? createOwnScriptScenes() : generateStory({ withVoice: true })}
-                  disabled={generatingStory || generatingSpeech}
+                  disabled={generatingStory || generatingMotion || generatingSpeech}
                 >
                   {project.creationMode === "script" ? <Clapperboard size={13} /> : <WandSparkles size={13} />}
                   {project.creationMode === "script" ? "Susun ulang" : "Generate ulang"}
@@ -1750,7 +1981,7 @@ INSTRUKSI
                       className="button button-quiet button-small"
                       key={revision.label}
                       onClick={() => reviseStory(revision.instruction, revisionTarget === "all" ? null : Number(revisionTarget))}
-                      disabled={revisingStory || generatingStory}
+                      disabled={revisingStory || generatingStory || generatingMotion}
                     >
                       {revisingStory ? <LoaderCircle className="loading-spinner-icon" size={12} /> : null}
                       {revision.label}
@@ -1772,12 +2003,62 @@ INSTRUKSI
                   <button
                     className="button button-primary button-small"
                     onClick={() => reviseStory(revisionInstruction, revisionTarget === "all" ? null : Number(revisionTarget))}
-                    disabled={revisingStory || generatingStory || !revisionInstruction.trim()}
+                    disabled={revisingStory || generatingStory || generatingMotion || !revisionInstruction.trim()}
                   >
                     {revisingStory ? "Merevisi..." : "Revisi"}
                   </button>
                 </div>
                 <small className="revision-note">Revisi AI memakai API lagi; edit manual tetap gratis dan langsung tersimpan.</small>
+              </div>
+              <div className="motion-design-tools">
+                <div>
+                  <span className="mini-eyebrow">AI MOTION DESIGN</span>
+                  <small>AI hanya merancang grafis bergerak; naskah dan voice-over nggak diubah.</small>
+                </div>
+                <button
+                  type="button"
+                  className="button button-primary button-small"
+                  onClick={generateSceneMotion}
+                  disabled={generatingImages || generatingMotion || generatingStory || generatingSpeech || project.scenes.length < 2}
+                >
+                  {generatingMotion ? <LoaderCircle className="loading-spinner-icon" size={13} /> : <WandSparkles size={13} />}
+                  {generatingMotion ? "Merancang motion..." : "Rancang motion AI"}
+                </button>
+              </div>
+              <div className="scene-image-tools">
+                <div>
+                  <span className="mini-eyebrow">VISUAL AI PER ADEGAN</span>
+                  <small>
+                    Gemini membuat gambar baru dari arahan visual dan character bible; Remotion menganimasikannya.
+                    Satu request untuk tiap adegan, memakai kuota/harga model gambar yang terpisah.
+                    {!aiStatus?.geminiImageConfigured ? " Siapkan GEMINI_API_KEY untuk mengaktifkannya." : ""}
+                  </small>
+                  {imageProgress && (
+                    <small className="scene-image-progress" role="status">
+                      {imageProgress.completed}/{imageProgress.total} gambar selesai
+                    </small>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  className="button button-primary button-small"
+                  onClick={() => generateSceneImages(project.scenes.filter((scene) => !scene.visualAssetId).map((scene) => scene.id))}
+                  disabled={
+                    generatingImages ||
+                    generatingStory ||
+                    generatingSpeech ||
+                    generatingMotion ||
+                    !aiStatus?.geminiImageConfigured ||
+                    missingSceneImageCount === 0
+                  }
+                >
+                  {generatingImages ? <LoaderCircle className="loading-spinner-icon" size={13} /> : <ImagePlus size={13} />}
+                  {generatingImages
+                    ? `Membuat gambar ${imageProgress?.completed ?? 0}/${imageProgress?.total ?? 0}...`
+                    : missingSceneImageCount > 0
+                      ? `Buat ${missingSceneImageCount} visual kosong`
+                      : "Semua adegan sudah punya visual"}
+                </button>
               </div>
               <div className="timeline-panel">
                 <div className="timeline-heading">
@@ -1815,6 +2096,32 @@ INSTRUKSI
                         <span className={scene.voiceAssetId ? "voice-ready" : "voice-missing"}>
                           {scene.voiceAssetId ? `Voice ${Number(scene.voiceDurationSeconds || 0).toFixed(1)} dtk` : "Belum ada voice"}
                         </span>
+                      </div>
+                      <div className="scene-image-action">
+                        <span className={scene.visualAssetId ? "voice-ready" : "voice-missing"}>
+                          {scene.visualAssetId ? "Visual terpasang" : "Belum ada visual"}
+                        </span>
+                        <button
+                          type="button"
+                          className="button button-quiet button-small"
+                          onClick={() => generateSceneImages([scene.id])}
+                          disabled={
+                            generatingImages ||
+                            generatingStory ||
+                            generatingSpeech ||
+                            generatingMotion ||
+                            !aiStatus?.geminiImageConfigured
+                          }
+                        >
+                          {generatingImages && imageProgress?.activeSceneId === scene.id
+                            ? <LoaderCircle className="loading-spinner-icon" size={12} />
+                            : <ImagePlus size={12} />}
+                          {scene.visualAssetId
+                            ? assets.find((asset) => asset.id === scene.visualAssetId)?.generatedBy === "gemini-image"
+                              ? "Generate ulang AI"
+                              : "Ganti dengan AI"
+                            : "Buat gambar AI"}
+                        </button>
                       </div>
                       <label className="edit-field">
                         <span>{scene.label || `ADEGAN ${index + 1}`}</span>
@@ -1879,6 +2186,90 @@ INSTRUKSI
                           </select>
                         </label>
                       </div>
+                      <div className="scene-motion-controls">
+                        <label className="edit-field">
+                          <span>MOTION GRAPHICS · {scene.motionStyle ? SCENE_MOTION_LABELS[scene.motionStyle] || scene.motionStyle : "Orbit"}</span>
+                          <select
+                            className="text-input"
+                            value={scene.motionStyle || "orbit"}
+                            onChange={(event) => updateScene(scene.id, "motionStyle", event.target.value)}
+                          >
+                            {SCENE_MOTION_STYLES.map((style) => <option value={style} key={style}>{SCENE_MOTION_LABELS[style]}</option>)}
+                          </select>
+                        </label>
+                        <label className="edit-field">
+                          <span>INTENSITAS · {scene.motionIntensity || 2}/3</span>
+                          <select
+                            className="text-input"
+                            value={scene.motionIntensity || 2}
+                            onChange={(event) => updateScene(scene.id, "motionIntensity", Number(event.target.value))}
+                          >
+                            <option value={1}>1 · Halus</option>
+                            <option value={2}>2 · Energik</option>
+                            <option value={3}>3 · Ekspresif</option>
+                          </select>
+                        </label>
+                        <label className="edit-field">
+                          <span>TEKS MOTION</span>
+                          <input
+                            className="text-input"
+                            maxLength={48}
+                            value={scene.motionText || scene.onScreenText}
+                            onChange={(event) => updateScene(scene.id, "motionText", event.target.value)}
+                          />
+                        </label>
+                      </div>
+                      <div className="scene-motion-controls">
+                        <label className="edit-field">
+                          <span>KATA FOKUS</span>
+                          <input
+                            className="text-input"
+                            maxLength={32}
+                            value={scene.motionEmphasis || scene.onScreenText.split(/\s+/)[0] || ""}
+                            onChange={(event) => updateScene(scene.id, "motionEmphasis", event.target.value)}
+                          />
+                        </label>
+                        <label className="edit-field">
+                          <span>ARAH GERAK</span>
+                          <select
+                            className="text-input"
+                            value={scene.motionDirection || "center"}
+                            onChange={(event) => updateScene(scene.id, "motionDirection", event.target.value)}
+                          >
+                            <option value="left">Dari kiri</option>
+                            <option value="right">Dari kanan</option>
+                            <option value="up">Dari atas</option>
+                            <option value="down">Dari bawah</option>
+                            <option value="center">Dari tengah</option>
+                          </select>
+                        </label>
+                        <label className="edit-field">
+                          <span>RITME MASUK</span>
+                          <select
+                            className="text-input"
+                            value={scene.motionTempo || "steady"}
+                            onChange={(event) => updateScene(scene.id, "motionTempo", event.target.value)}
+                          >
+                            <option value="deliberate">Dramatis</option>
+                            <option value="steady">Terukur</option>
+                            <option value="rapid">Cepat / impact</option>
+                          </select>
+                        </label>
+                      </div>
+                      <div className="scene-motion-controls">
+                        <label className="edit-field">
+                          <span>TRANSISI MASUK</span>
+                          <select
+                            className="text-input"
+                            value={scene.motionEntrance || "rise"}
+                            onChange={(event) => updateScene(scene.id, "motionEntrance", event.target.value)}
+                          >
+                            {SCENE_MOTION_ENTRANCES.map((entrance) => (
+                              <option value={entrance} key={entrance}>{SCENE_MOTION_ENTRANCE_LABELS[entrance]}</option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
                       <div className="scene-timing-controls">
                         <label className="edit-field">
                           <span>DURASI ADEGAN · {sceneActiveDuration(scene).toFixed(1)} dtk</span>
@@ -1923,7 +2314,7 @@ INSTRUKSI
                         ) : (
                           <span>Audio adegan muncul di sini setelah dibuat.</span>
                         )}
-                        <button className="button button-quiet button-small" onClick={() => regenerateSceneSpeech(scene)} disabled={generatingSpeech}>
+                        <button className="button button-quiet button-small" onClick={() => regenerateSceneSpeech(scene)} disabled={generatingImages || generatingSpeech}>
                           {generatingSpeech ? <LoaderCircle className="loading-spinner-icon" size={12} /> : <Mic2 size={12} />}
                           {generatingSpeech ? speechProgress ? `Voice ${speechProgress.completed + 1}/${speechProgress.total}...` : "Memproses..." : scene.voiceAssetId ? "Buat ulang voice" : "Buat voice adegan"}
                         </button>
@@ -1996,7 +2387,7 @@ INSTRUKSI
               <button
                 className="button button-primary tts-generate"
                 onClick={generateSpeech}
-                disabled={generatingSpeech || !project.narration.trim()}
+                disabled={generatingImages || generatingSpeech || !project.narration.trim()}
               >
                 {generatingSpeech ? <LoaderCircle className="loading-spinner-icon" size={15} /> : <Mic2 size={15} />}
                 {generatingSpeech ? "Membuat voice-over..." : project.scenes.length > 0 ? "Generate voice per adegan" : "Generate voice-over penuh"}

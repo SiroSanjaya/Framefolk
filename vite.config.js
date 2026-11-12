@@ -10,6 +10,7 @@ export default defineConfig(({ mode }) => {
     "AI_PROVIDER",
     "GEMINI_API_KEY",
     "GEMINI_MODEL",
+    "GEMINI_IMAGE_MODEL",
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_MODEL",
     "ELEVENLABS_API_KEY",

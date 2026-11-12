@@ -1062,6 +1062,66 @@ button {
   background: #141614;
 }
 
+.motion-design-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px;
+  border: 1px solid #3b4736;
+  border-radius: 8px;
+  background: linear-gradient(120deg, #1d251a, #141614 72%);
+}
+
+.motion-design-tools > div {
+  display: grid;
+  gap: 5px;
+}
+
+.motion-design-tools small {
+  color: #92998c;
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.scene-image-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px;
+  border: 1px solid #394536;
+  border-radius: 8px;
+  background: linear-gradient(120deg, #1a211a, #141614 72%);
+}
+
+.scene-image-tools > div {
+  display: grid;
+  gap: 5px;
+}
+
+.scene-image-tools small {
+  color: #92998c;
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.scene-image-tools .scene-image-progress {
+  color: #c1f17b;
+  font-family: "DM Mono", monospace;
+}
+
+.scene-image-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.scene-image-action > span {
+  font: 8px "DM Mono", monospace;
+}
+
 .quick-revision-row,
 .revision-custom-row {
   display: flex;
@@ -1201,6 +1261,7 @@ button {
 }
 
 .scene-design-controls,
+.scene-motion-controls,
 .scene-timing-controls {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1887,9 +1948,25 @@ button {
   }
 
   .scene-design-controls,
+  .scene-motion-controls,
   .scene-timing-controls {
     grid-template-columns: 1fr;
     gap: 11px;
+  }
+
+  .motion-design-tools {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .scene-image-tools {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .scene-image-action {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .scene-timing-summary {

@@ -12,6 +12,10 @@ const MAX_TOTAL_BYTES = 300 * 1024 * 1024;
 const MAX_RENDER_ASSETS = 27;
 const SCENE_VISUAL_TYPES = new Set(["hero", "split", "quote", "punchline", "cinematic", "sticker", "poster"]);
 const SCENE_MOTIONS = new Set(["rise", "drift", "zoom", "pop", "reveal"]);
+const SCENE_MOTION_GRAPHICS = new Set(["kinetic-type", "orbit", "depth", "burst", "diagram", "fluid"]);
+const SCENE_MOTION_DIRECTIONS = new Set(["left", "right", "up", "down", "center"]);
+const SCENE_MOTION_TEMPOS = new Set(["deliberate", "steady", "rapid"]);
+const SCENE_MOTION_ENTRANCES = new Set(["slam", "wipe", "orbit", "unfold", "rise"]);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const EXTENSIONS_BY_TYPE = {
   "image/avif": ".avif",
@@ -182,9 +186,19 @@ const validateProject = (project) => {
     }
     if (
       (scene.visualType !== undefined && !SCENE_VISUAL_TYPES.has(scene.visualType)) ||
-      (scene.motionPreset !== undefined && !SCENE_MOTIONS.has(scene.motionPreset))
+      (scene.motionPreset !== undefined && !SCENE_MOTIONS.has(scene.motionPreset)) ||
+      (scene.motionStyle !== undefined && !SCENE_MOTION_GRAPHICS.has(scene.motionStyle)) ||
+      (scene.motionIntensity !== undefined &&
+        (!Number.isInteger(scene.motionIntensity) || scene.motionIntensity < 1 || scene.motionIntensity > 3)) ||
+      (scene.motionText !== undefined &&
+        (typeof scene.motionText !== "string" || scene.motionText.length > 48)) ||
+      (scene.motionEmphasis !== undefined &&
+        (typeof scene.motionEmphasis !== "string" || scene.motionEmphasis.length > 32)) ||
+      (scene.motionDirection !== undefined && !SCENE_MOTION_DIRECTIONS.has(scene.motionDirection)) ||
+      (scene.motionTempo !== undefined && !SCENE_MOTION_TEMPOS.has(scene.motionTempo)) ||
+      (scene.motionEntrance !== undefined && !SCENE_MOTION_ENTRANCES.has(scene.motionEntrance))
     ) {
-      throw new RequestError("One of the editable scenes has an unsupported visual type or motion preset.");
+      throw new RequestError("One of the editable scenes has an unsupported visual or motion setting.");
     }
     if (
       scene.voiceAssetId !== undefined &&

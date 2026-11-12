@@ -2,6 +2,7 @@ import React from "react";
 import {
   AbsoluteFill,
   Audio,
+  Easing,
   Img,
   interpolate,
   Sequence,
@@ -127,6 +128,304 @@ const SceneIllustration = ({ kind, accent, frame, fps, label, direction }) => {
   );
 };
 
+const SceneMotionGraphics = ({
+  style,
+  intensity = 2,
+  text,
+  emphasis,
+  direction = "right",
+  tempo = "steady",
+  entrance = "rise",
+  frame,
+  fps,
+  durationInFrames,
+  width,
+  height,
+  accent,
+}) => {
+  const safeStyle = ["kinetic-type", "orbit", "depth", "burst", "diagram", "fluid"].includes(style)
+    ? style
+    : "orbit";
+  const energy = Math.max(1, Math.min(3, Number(intensity) || 2));
+  const pace = { deliberate: 0.68, steady: 1, rapid: 1.48 }[tempo] || 1;
+  const cycleTime = (frame / fps) * pace;
+  const progress = Math.max(0, Math.min(1, frame / Math.max(1, durationInFrames)));
+  const entranceSeconds = { slam: 0.34, wipe: 0.62, orbit: 0.78, unfold: 0.72, rise: 0.58 }[entrance] || 0.58;
+  const entranceFrames = Math.max(1, entranceSeconds * fps / pace);
+  const easing = entrance === "slam" ? Easing.out(Easing.back(1.35)) : Easing.out(Easing.cubic);
+  const enter = interpolate(frame, [0, entranceFrames], [0, 1], {
+    extrapolateRight: "clamp",
+    easing,
+  });
+  const exit = interpolate(frame, [durationInFrames - fps * 0.28, durationInFrames], [1, 0], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
+  const focus = {
+    left: { x: 0.31, y: 0.38, xOffset: -1 },
+    right: { x: 0.72, y: 0.38, xOffset: 1 },
+    up: { x: 0.57, y: 0.24, yOffset: -1 },
+    down: { x: 0.59, y: 0.53, yOffset: 1 },
+    center: { x: 0.52, y: 0.37 },
+  }[direction] || { x: 0.72, y: 0.38, xOffset: 1 };
+  const centerX = width * focus.x;
+  const centerY = height * focus.y;
+  const radius = Math.min(width, height) * (0.12 + energy * 0.04);
+  const entranceDistance = entrance === "slam" ? 0.32 : entrance === "unfold" ? 0.42 : 1.25;
+  const startX = (focus.xOffset || 0) * radius * entranceDistance * (1 - enter);
+  const startY = entrance === "rise"
+    ? radius * 0.8 * (1 - enter)
+    : (focus.yOffset || 0) * radius * entranceDistance * (1 - enter);
+  const startScale = { slam: 1.72, wipe: 0.9, orbit: 0.78, unfold: 0.28, rise: 0.72 }[entrance] || 0.72;
+  const scaleIn = interpolate(enter, [0, 1], [startScale, 1]);
+  const orbitalEntry = interpolate(enter, [0, 1], [entrance === "orbit" ? -155 : 0, 0]);
+  const settle = 1 +
+    Math.sin(cycleTime * 2.1) * (0.012 * energy) +
+    Math.sin(progress * Math.PI * 4) * (0.018 * energy);
+  const phrase = (text || "").trim().split(/\s+/).slice(0, 3).join(" ").toUpperCase();
+  const focusWord = (emphasis || phrase.split(/\s+/)[0] || "").trim().split(/\s+/)[0].toUpperCase();
+  const rays = Array.from({ length: 14 }, (_, index) => {
+    const angle = (Math.PI * 2 * index) / 14;
+    const inner = radius * 0.64;
+    const outer = radius * (1.08 + ((index % 3) * 0.14));
+    return {
+      x1: centerX + Math.cos(angle) * inner,
+      y1: centerY + Math.sin(angle) * inner,
+      x2: centerX + Math.cos(angle) * outer,
+      y2: centerY + Math.sin(angle) * outer,
+    };
+  });
+
+  return (
+    <div style={{ position: "absolute", inset: 0, zIndex: 1.5, overflow: "hidden", pointerEvents: "none", opacity: 0.9 * exit }}>
+      <svg width="100%" height="100%" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMidYMid slice">
+        <defs>
+          <linearGradient id="motion-depth-fill" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stopColor={accent} stopOpacity=".72" />
+            <stop offset="100%" stopColor={accent} stopOpacity=".05" />
+          </linearGradient>
+          <radialGradient id="motion-fluid-fill">
+            <stop offset="0%" stopColor={accent} stopOpacity=".38" />
+            <stop offset="100%" stopColor={accent} stopOpacity="0" />
+          </radialGradient>
+          <linearGradient id="motion-sweep-fill" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stopColor={accent} stopOpacity="0" />
+            <stop offset="50%" stopColor="#fff4d8" stopOpacity=".72" />
+            <stop offset="100%" stopColor={accent} stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        <g transform={`translate(${startX} ${startY})`} opacity={enter}>
+        {safeStyle === "kinetic-type" ? (
+          <g opacity=".82" transform={`translate(${interpolate(frame, [0, entranceFrames], [-width * 0.15, 0], { extrapolateRight: "clamp", easing })} 0) rotate(${orbitalEntry} ${width * 0.5} ${centerY}) scale(${scaleIn})`}>
+            <text
+              x={width * 0.5}
+              y={centerY}
+              textAnchor="middle"
+              fill={accent}
+              fillOpacity=".18"
+              stroke="#fff4d8"
+              strokeOpacity=".78"
+              strokeWidth={Math.max(1.5, width * 0.002)}
+              fontSize={Math.min(width * 0.17, height * 0.095)}
+              fontWeight="900"
+              letterSpacing="-0.07em"
+            >
+              {phrase}
+            </text>
+            <text
+              x={width * 0.5}
+              y={centerY + radius * 0.28}
+              textAnchor="middle"
+              fill="#fff4d8"
+              fillOpacity=".76"
+              fontSize={Math.min(width * 0.058, height * 0.032)}
+              fontWeight="800"
+              letterSpacing=".16em"
+            >
+              {focusWord}
+            </text>
+            {[0, 1, 2, 3].map((line) => (
+              <path
+                key={line}
+                d={`M${width * 0.12} ${centerY + radius * (0.54 + line * 0.13)} H${width * (0.46 + ((line % 2) * 0.12))}`}
+                stroke={accent}
+                strokeWidth={Math.max(2, width * 0.006)}
+                strokeLinecap="round"
+                strokeOpacity={0.48 - line * 0.08}
+                strokeDasharray={`${width * 0.08} ${width * 0.025}`}
+                strokeDashoffset={-cycleTime * width * (0.18 + energy * 0.1)}
+              />
+            ))}
+          </g>
+        ) : null}
+        {safeStyle === "orbit" ? (
+          <g transform={`translate(${centerX} ${centerY}) scale(${scaleIn * settle}) rotate(${orbitalEntry + cycleTime * (18 + energy * 9)})`} opacity=".74">
+            {[1, 0.72, 0.44].map((scale, index) => (
+              <ellipse
+                key={scale}
+                cx="0"
+                cy="0"
+                rx={radius * scale}
+                ry={radius * scale * 0.4}
+                fill="none"
+                stroke={accent}
+                strokeWidth={Math.max(2, width * 0.003)}
+                strokeDasharray={`${radius * (0.32 - index * 0.04)} ${radius * 0.12}`}
+                transform={`rotate(${index * 58})`}
+              />
+            ))}
+            {[0, 1, 2].map((index) => {
+              const angle = cycleTime * (0.95 + index * 0.22) + (index * Math.PI * 2) / 3;
+              return (
+                <circle
+                  key={index}
+                  cx={Math.cos(angle) * radius * (0.76 - index * 0.12)}
+                  cy={Math.sin(angle) * radius * (0.32 - index * 0.05)}
+                  r={Math.max(7, width * 0.014)}
+                  fill={index === 0 ? "#fff4d8" : accent}
+                />
+              );
+            })}
+            <circle cx="0" cy="0" r={radius * 0.12} fill={accent} fillOpacity=".26" stroke="#fff4d8" strokeWidth={Math.max(2, width * 0.004)} />
+            <text x="0" y={radius * 0.04} textAnchor="middle" fill="#fff4d8" fontSize={Math.min(width * 0.04, height * 0.022)} fontWeight="900">{focusWord}</text>
+          </g>
+        ) : null}
+        {safeStyle === "depth" ? (
+          <g
+            opacity=".78"
+            transform={`translate(${centerX} ${centerY + radius * 0.12 * (1 - enter)}) rotate(${-28 + Math.sin(cycleTime * 0.55) * 7 + orbitalEntry * 0.18}) skewY(-12) scale(${scaleIn * settle})`}
+          >
+            {[3, 2, 1, 0].map((layer) => {
+              const size = radius * (1 - layer * 0.13);
+              const drop = layer * radius * 0.1 + Math.sin(cycleTime * 1.8 + layer) * radius * 0.04;
+              return (
+                <rect
+                  key={layer}
+                  x={-size / 2}
+                  y={-size / 2 + drop}
+                  width={size}
+                  height={size}
+                  rx={radius * 0.09}
+                  fill={layer === 0 ? "url(#motion-depth-fill)" : "none"}
+                  stroke={layer === 0 ? "#fff4d8" : accent}
+                  strokeWidth={Math.max(2, width * 0.005)}
+                  strokeOpacity={0.28 + (3 - layer) * 0.14}
+                />
+              );
+            })}
+            <path d={`M${-radius * 0.32} 0 H${radius * 0.32} M0 ${-radius * 0.32} V${radius * 0.32}`} stroke="#fff4d8" strokeOpacity=".6" strokeWidth={Math.max(2, width * 0.003)} />
+            <text x="0" y={radius * 0.28} textAnchor="middle" fill="#fff4d8" fontSize={Math.min(width * 0.04, height * 0.022)} fontWeight="900">{focusWord}</text>
+          </g>
+        ) : null}
+        {safeStyle === "burst" ? (
+          <g transform={`translate(${centerX} ${centerY}) rotate(${orbitalEntry + cycleTime * (12 + energy * 8)}) scale(${scaleIn * (1 + Math.sin(cycleTime * 2.5) * 0.04)})`} opacity=".78">
+            {rays.map((ray, index) => (
+              <line
+                key={index}
+                x1={(ray.x1 - centerX) * (0.68 + enter * 0.32)}
+                y1={(ray.y1 - centerY) * (0.68 + enter * 0.32)}
+                x2={(ray.x2 - centerX) * (0.88 + Math.sin(cycleTime * 2 + index) * 0.11)}
+                y2={(ray.y2 - centerY) * (0.88 + Math.sin(cycleTime * 2 + index) * 0.11)}
+                stroke={index % 3 === 0 ? "#fff4d8" : accent}
+                strokeWidth={Math.max(2, width * (index % 3 === 0 ? 0.008 : 0.004))}
+                strokeLinecap="round"
+              />
+            ))}
+            <circle cx="0" cy="0" r={radius * (0.24 + Math.sin(cycleTime * 2.5) * 0.035)} fill={accent} fillOpacity=".24" stroke={accent} strokeWidth={Math.max(2, width * 0.005)} />
+            <text x="0" y={radius * 0.045} textAnchor="middle" fill="#fff4d8" fontSize={Math.min(width * 0.04, height * 0.022)} fontWeight="900">{focusWord}</text>
+          </g>
+        ) : null}
+        {safeStyle === "diagram" ? (
+          <g opacity=".78" transform={`translate(${startX} ${startY}) scale(${0.96 + enter * 0.04})`}>
+            {[0, 1].map((row) => {
+              const y = centerY + (row - 0.5) * radius * 0.68;
+              const start = centerX - radius * 1.28;
+              const end = centerX + radius * 1.28;
+              return (
+                <g key={row}>
+                  <path
+                    d={`M${start} ${y} C${width * 0.36} ${y - radius * 0.24}, ${width * 0.52} ${y + radius * 0.24}, ${end} ${y}`}
+                    fill="none"
+                    stroke={accent}
+                    strokeWidth={Math.max(3, width * 0.004)}
+                    strokeDasharray={`${radius * 0.12} ${radius * 0.07}`}
+                    strokeDashoffset={-cycleTime * radius * (1.2 + energy * 0.55)}
+                  />
+                  {[0, 1, 2].map((node) => (
+                    <circle
+                      key={node}
+                      cx={start + (end - start) * (node / 2)}
+                      cy={y + Math.sin(cycleTime * 2 + node + row) * radius * 0.15}
+                      r={Math.max(8, width * 0.016)}
+                      fill={node === 1 ? "#fff4d8" : accent}
+                    />
+                  ))}
+                  <text x={centerX} y={y + radius * 0.26} textAnchor="middle" fill="#fff4d8" fontSize={Math.min(width * 0.032, height * 0.018)} fontWeight="900">{focusWord}</text>
+                </g>
+              );
+            })}
+          </g>
+        ) : null}
+        {safeStyle === "fluid" ? (
+          <g opacity=".84" transform={`translate(${startX} ${startY}) scale(${scaleIn * settle})`}>
+            {[0, 1, 2].map((index) => {
+              const angle = cycleTime * (0.58 + index * 0.2) + index * 2.1;
+              const x = centerX + Math.cos(angle) * radius * (0.42 + index * 0.08);
+              const y = centerY + Math.sin(angle * 0.83) * radius * (0.28 + index * 0.06);
+              const blobRadius = radius * (0.36 + Math.sin(cycleTime * 1.7 + index) * 0.06);
+              return (
+                <circle
+                  key={index}
+                  cx={x}
+                  cy={y}
+                  r={blobRadius}
+                  fill={index === 1 ? "#fff4d8" : "url(#motion-fluid-fill)"}
+                  fillOpacity={index === 1 ? ".09" : ".8"}
+                  stroke={accent}
+                  strokeOpacity=".38"
+                  strokeWidth={Math.max(2, width * 0.002)}
+                />
+              );
+            })}
+            <path
+              d={`M${centerX - radius * 1.2} ${centerY} Q${centerX - radius * 0.55} ${centerY - Math.sin(cycleTime) * radius * 0.45} ${centerX} ${centerY} T${centerX + radius * 1.2} ${centerY}`}
+              fill="none"
+              stroke="url(#motion-sweep-fill)"
+              strokeWidth={Math.max(4, width * 0.012)}
+              strokeLinecap="round"
+            />
+            <text x={centerX} y={centerY + radius * 0.06} textAnchor="middle" fill="#fff4d8" fontSize={Math.min(width * 0.04, height * 0.022)} fontWeight="900">{focusWord}</text>
+          </g>
+        ) : null}
+        {entrance === "wipe" ? (
+          <rect
+            x={direction === "left" ? 0 : direction === "right" ? width * (1 - enter) : 0}
+            y={direction === "up" ? 0 : direction === "down" ? height * (1 - enter) : centerY - radius * 1.4}
+            width={direction === "left" || direction === "right" ? width * enter : width}
+            height={direction === "up" || direction === "down" ? height * enter : radius * 2.8}
+            fill={accent}
+            fillOpacity=".08"
+            stroke="url(#motion-sweep-fill)"
+            strokeWidth={Math.max(2, width * 0.003)}
+          />
+        ) : null}
+        {entrance === "slam" && frame < entranceFrames * 1.8 ? (
+          <circle
+            cx={centerX}
+            cy={centerY}
+            r={radius * interpolate(frame, [0, entranceFrames * 1.8], [0.15, 1.45], { extrapolateRight: "clamp" })}
+            fill="none"
+            stroke="#fff4d8"
+            strokeOpacity={interpolate(frame, [0, entranceFrames * 1.8], [0.75, 0], { extrapolateRight: "clamp" })}
+            strokeWidth={Math.max(3, width * 0.006)}
+          />
+        ) : null}
+        </g>
+      </svg>
+    </div>
+  );
+};
+
 const PromoComposition = ({
   characterName,
   characterTraits,
@@ -221,7 +520,21 @@ const PromoComposition = ({
   const isSpeaking = currentScene
     ? Boolean(currentScene.voiceAssetId) && sceneFrame < activeVoiceDuration * fps
     : Boolean(audioNarration && (audioAssetPath || audioUrl)) && frame < activeVoiceDuration * fps;
-  const mouthOpen = isSpeaking && Math.sin(sceneFrame * 0.9) > 0;
+  const spokenWord = activeAlignedWord >= 0 ? alignedWords[activeAlignedWord] : undefined;
+  const estimatedWordDuration = fallbackWords.length > 0 ? activeVoiceDuration / fallbackWords.length : 0;
+  const wordStartSeconds = spokenWord?.startSeconds ??
+    (spokenWordIndex >= 0 ? spokenWordIndex * estimatedWordDuration : 0);
+  const wordEndSeconds = spokenWord?.endSeconds ??
+    (spokenWordIndex >= 0 ? (spokenWordIndex + 1) * estimatedWordDuration : 0);
+  const wordProgress = wordEndSeconds > wordStartSeconds
+    ? Math.max(0, Math.min(1, (sceneElapsedSeconds - wordStartSeconds) / (wordEndSeconds - wordStartSeconds)))
+    : 0;
+  const spokenWordText = spokenWord?.word || fallbackWords[spokenWordIndex] || "";
+  const syllableCount = Math.max(1, spokenWordText.match(/[aiueo]+/giu)?.length || 1);
+  const isOnActiveWord = alignedWords.length > 0 ? activeAlignedWord >= 0 : spokenWordIndex >= 0;
+  const mouthOpen = isSpeaking && isOnActiveWord &&
+    Math.sin(wordProgress * Math.PI * syllableCount * 2) > -0.15;
+  const talkingGesture = isSpeaking ? Math.sin(sceneFrame * 0.16) * 22 : Math.sin(frame * 0.045) * 5;
   const motionPreset = currentScene?.motionPreset || "rise";
   const characterEntranceX = {
     rise: 0,
@@ -256,6 +569,8 @@ const PromoComposition = ({
   const illustrationTheme = getIllustrationTheme(
     `${currentScene?.label || ""} ${currentScene?.visualDescription || ""} ${currentScene?.narration || ""}`,
   );
+  const motionStyles = ["kinetic-type", "orbit", "depth", "burst", "diagram", "fluid"];
+  const motionStyle = currentScene?.motionStyle || motionStyles[Math.max(0, sceneIndex) % motionStyles.length];
 
   const characterPosition = {
     hero: { right: "5%", bottom: "13%", width: "43%", height: "61%" },
@@ -369,6 +684,23 @@ const PromoComposition = ({
         </Sequence>
       ) : null}
       <AbsoluteFill style={{ background: styleTreatment }} />
+      {currentScene ? (
+        <SceneMotionGraphics
+          style={motionStyle}
+          intensity={currentScene.motionIntensity}
+          text={currentScene.motionText || currentScene.onScreenText}
+          emphasis={currentScene.motionEmphasis}
+          direction={currentScene.motionDirection}
+          tempo={currentScene.motionTempo}
+          entrance={currentScene.motionEntrance}
+          frame={sceneFrame}
+          fps={fps}
+          durationInFrames={sceneDuration}
+          width={width}
+          height={height}
+          accent={accent}
+        />
+      ) : null}
       <div
         style={{
           position: "absolute",
@@ -480,7 +812,16 @@ const PromoComposition = ({
           <svg viewBox="0 0 360 460" width="100%" height="100%" role="img" aria-label={`${characterName || "Framefolk"} talking character`}>
             <ellipse cx="185" cy="429" rx="120" ry="20" fill="#000" fillOpacity=".34" />
             <path d="M92 186c0-79 39-132 92-132s92 53 92 132v143c0 52-41 88-92 88s-92-36-92-88z" fill={accent} stroke="#fff8" strokeWidth="7" />
-            <path d="M99 232C56 205 39 230 51 272c8 27 31 37 54 28m154-68c43-27 60-2 48 40-8 27-31 37-54 28" fill={accent} stroke="#fff8" strokeWidth="7" strokeLinecap="round" />
+            <g transform={`rotate(${-talkingGesture} 106 271)`}>
+              <path d="M108 273C77 270 61 251 55 228" fill="none" stroke={accent} strokeWidth="24" strokeLinecap="round" />
+              <path d="M108 273C77 270 61 251 55 228" fill="none" stroke="#fff8" strokeWidth="7" strokeLinecap="round" />
+              <circle cx="54" cy="224" r="13" fill="#fff4d8" stroke="#172019" strokeWidth="4" />
+            </g>
+            <g transform={`rotate(${talkingGesture * 0.86} 270 271)`}>
+              <path d="M252 273c31-3 47-22 53-45" fill="none" stroke={accent} strokeWidth="24" strokeLinecap="round" />
+              <path d="M252 273c31-3 47-22 53-45" fill="none" stroke="#fff8" strokeWidth="7" strokeLinecap="round" />
+              <circle cx="306" cy="224" r="13" fill="#fff4d8" stroke="#172019" strokeWidth="4" />
+            </g>
             <ellipse cx="144" cy="204" rx="15" ry={isSpeaking ? 10 : 16} fill="#172019" />
             <ellipse cx="220" cy="204" rx="15" ry={isSpeaking ? 10 : 16} fill="#172019" />
             <circle cx="149" cy="199" r="4" fill="white" />
