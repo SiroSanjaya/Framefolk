@@ -871,6 +871,115 @@ button {
   line-height: 1.5;
 }
 
+.creation-mode-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.creation-mode-tab {
+  display: inline-flex;
+  min-width: 0;
+  min-height: 40px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 8px 10px;
+  border: 1px solid #343832;
+  border-radius: 8px;
+  color: #aeb3a8;
+  background: #151715;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.creation-mode-tab:hover {
+  border-color: #59664a;
+  color: #e4e6df;
+}
+
+.creation-mode-tab.is-active {
+  border-color: #596c47;
+  color: var(--lime);
+  background: #252d20;
+}
+
+.manual-script-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.manual-script-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.manual-script-note {
+  color: #858b80;
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.content-preferences {
+  display: grid;
+  gap: 12px;
+  padding: 11px;
+  border: 1px solid #30342e;
+  border-radius: 8px;
+  background: #151715;
+}
+
+.content-preferences > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #d7ddce;
+  font-size: 10px;
+  font-weight: 600;
+  list-style: none;
+  cursor: pointer;
+}
+
+.content-preferences > summary::-webkit-details-marker {
+  display: none;
+}
+
+.content-preferences > summary > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.content-preferences > summary svg {
+  color: var(--lime);
+}
+
+.content-preferences > summary small,
+.content-preferences > small {
+  color: #858b80;
+  font-size: 8px;
+  font-weight: 400;
+  line-height: 1.5;
+  text-align: right;
+}
+
+.preference-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.preference-grid select {
+  color-scheme: dark;
+}
+
+.preference-wide {
+  grid-column: 1 / -1;
+}
+
 .guided-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1094,7 +1203,7 @@ button {
 .scene-design-controls,
 .scene-timing-controls {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -1125,6 +1234,16 @@ button {
 
 .voice-select {
   color-scheme: dark;
+}
+
+.voice-preview-control {
+  display: grid;
+  gap: 7px;
+}
+
+.voice-preview-control audio {
+  width: min(100%, 360px);
+  height: 34px;
 }
 
 .tts-generate {
@@ -1614,8 +1733,34 @@ button {
     width: 100%;
   }
 
+  .manual-script-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .manual-script-actions .button {
+    width: 100%;
+  }
+
+  .content-preferences > summary {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .content-preferences > summary small {
+    text-align: left;
+  }
+
   .guided-grid {
     grid-template-columns: 1fr;
+  }
+
+  .preference-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .preference-wide {
+    grid-column: auto;
   }
 
   .guided-wide {

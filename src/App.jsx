@@ -36,6 +36,13 @@ const DEFAULT_PROJECT = {
   characterTraits: "Ceria, observan, sedikit usil",
   characterVoice: "Hangat dan santai, tempo sedang, artikulasi jelas.",
   brief: "Bikin video pendek yang ngenalin karakter dan hal yang dia suka.",
+  creationMode: "idea",
+  contentPreferences: {
+    writingStyle: "conversational",
+    energy: "balanced",
+    humor: "light",
+    avoidPhrases: "",
+  },
   goal: "storytelling",
   audience: "",
   platform: "instagram-reels",
@@ -53,11 +60,14 @@ const DEFAULT_PROJECT = {
   audioId: "",
   audioVolume: 70,
   voiceVolume: 100,
+  sfxVolume: 22,
+  voiceDelivery: "natural",
   audioNarration: "",
+  audioAlignment: [],
   ttsVoiceId: "",
 };
 
-const CLAUDE_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
+const STORY_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
 const QUICK_REVISIONS = [
   { label: "Lebih lucu", instruction: "Bikin lebih lucu dan lincah, tetap natural dan konsisten dengan karakter." },
   { label: "Lebih emosional", instruction: "Bikin lebih emosional dan menyentuh, tanpa jadi berlebihan." },
@@ -137,6 +147,48 @@ const distributeSceneDurations = (scenes, totalSeconds) => {
       : Math.max(0.5, Math.round((activeDuration * weights[index] / totalWeight) * 10) / 10);
     assignedDuration += durationSeconds;
     return { ...scene, durationSeconds: Math.round(durationSeconds * 10) / 10 };
+  });
+};
+
+const createScenesFromScript = (script) => {
+  const paragraphs = script.trim().replace(/[ \t]+/g, " ").split(/\n+/).filter(Boolean);
+  const beats = paragraphs.flatMap((paragraph) => {
+    const sentences = paragraph.match(/[^.!?…。！？]+[.!?…。！？]+|[^.!?…。！？]+$/gu) ?? [paragraph];
+    return sentences.flatMap((sentence) => {
+      const words = sentence.trim().split(/\s+/);
+      if (words.length <= 28) return [sentence.trim()];
+      const chunks = [];
+      for (let index = 0; index < words.length; index += 22) {
+        chunks.push(words.slice(index, index + 22).join(" "));
+      }
+      return chunks;
+    });
+  });
+  const beatsPerScene = Math.max(1, Math.ceil(beats.length / 6));
+  const groups = [];
+  for (let index = 0; index < beats.length; index += beatsPerScene) {
+    groups.push(beats.slice(index, index + beatsPerScene).join(" "));
+  }
+  const layouts = ["hero", "split", "quote", "poster", "sticker", "cinematic"];
+  const motions = ["rise", "drift", "zoom", "reveal", "pop", "rise"];
+  return groups.map((narration, index) => {
+    const onScreenText = narration.split(/\s+/).slice(0, 7).join(" ");
+    return {
+      id: crypto.randomUUID(),
+      label: `Beat ${String(index + 1).padStart(2, "0")}`,
+      narration,
+      onScreenText: onScreenText.length > 68 ? `${onScreenText.slice(0, 65).trimEnd()}…` : onScreenText,
+      visualDescription: "Pilih aset visual dan layout yang paling sesuai dengan bagian naskah ini.",
+      visualType: layouts[index % layouts.length],
+      motionPreset: motions[index % motions.length],
+      durationSeconds: estimateSpeechDuration(narration),
+      pauseAfterSeconds: index < groups.length - 1 ? 0.3 : 0,
+      voiceAssetId: "",
+      voiceDurationSeconds: 0,
+      voiceText: "",
+      voiceAlignment: [],
+      visualAssetId: "",
+    };
   });
 };
 
@@ -312,7 +364,24 @@ const App = () => {
   }, []);
 
   const updateProject = (key, value) => {
-    setProject((current) => ({ ...current, [key]: value }));
+    setProject((current) => ({
+      ...current,
+      [key]: value,
+      ...(key === "narration" && current.audioNarration && current.audioNarration !== value
+        ? { audioId: "", audioNarration: "", audioAlignment: [] }
+        : {}),
+    }));
+  };
+
+  const updateContentPreference = (key, value) => {
+    setProject((current) => ({
+      ...current,
+      contentPreferences: {
+        ...DEFAULT_PROJECT.contentPreferences,
+        ...current.contentPreferences,
+        [key]: value,
+      },
+    }));
   };
 
   const applyStarterTemplate = (template) => {
@@ -360,6 +429,11 @@ const App = () => {
   const backgroundAsset = assets.find((asset) => asset.id === project.backgroundId);
   const characterAsset = assets.find((asset) => asset.id === project.characterAssetId);
   const audioAsset = assets.find((asset) => asset.id === project.audioId);
+  const selectedVoice = voices.find((voice) => voice.id === project.ttsVoiceId);
+  const contentPreferences = {
+    ...DEFAULT_PROJECT.contentPreferences,
+    ...project.contentPreferences,
+  };
   const width = project.format === "portrait" ? 1080 : 1920;
   const height = project.format === "portrait" ? 1920 : 1080;
   const sceneTimeline = useMemo(() => {
@@ -379,7 +453,7 @@ const App = () => {
   const preflightChecks = useMemo(() => {
     const checks = [];
     if (project.scenes.length === 0) {
-      checks.push({ level: "warning", message: "Belum ada adegan hasil Claude; preview memakai komposisi default." });
+      checks.push({ level: "warning", message: "Belum ada adegan hasil AI; preview memakai komposisi default." });
     } else {
       const emptyScene = project.scenes.findIndex(
         (scene) => !scene.onScreenText.trim() || !scene.visualDescription.trim(),
@@ -407,6 +481,12 @@ const App = () => {
     if (project.audioId && !audioAsset) {
       checks.push({ level: "error", message: "Audio terpilih tidak ditemukan di library; pilih ulang sebelum render." });
     }
+    const missingVisual = project.scenes.findIndex(
+      (scene) => scene.visualAssetId && !assets.some((asset) => asset.id === scene.visualAssetId),
+    );
+    if (missingVisual >= 0) {
+      checks.push({ level: "error", message: `Aset visual adegan ${missingVisual + 1} tidak ditemukan di library; pilih ulang sebelum render.` });
+    }
     if (!project.audioId && !project.scenes.some((scene) => scene.voiceAssetId)) {
       checks.push({ level: "info", message: "Belum ada audio. Render tetap bisa dibuat tanpa suara." });
     } else if (project.audioId && project.audioNarration && project.audioNarration !== project.narration) {
@@ -426,6 +506,16 @@ const App = () => {
     }
     if (!characterAsset) {
       checks.push({ level: "info", message: "Belum ada gambar karakter; gunakan upload untuk tampilan karakter yang konsisten." });
+    }
+    if (
+      project.scenes.length > 0 &&
+      !backgroundAsset &&
+      !project.scenes.some((scene) => scene.visualAssetId)
+    ) {
+      checks.push({
+        level: "info",
+        message: "Belum ada gambar/video unggahan. Preview tetap memakai ilustrasi vektor otomatis berdasarkan tema tiap adegan; tambahkan aset sendiri jika butuh orang, lokasi, atau produk yang spesifik.",
+      });
     }
     if (project.goal === "promotion" && !project.callToAction.trim()) {
       checks.push({ level: "warning", message: "Tujuan video promosi dipilih, tetapi ajakan/CTA masih kosong." });
@@ -447,14 +537,19 @@ const App = () => {
       backgroundUrl: assetUrls[project.backgroundId],
       backgroundType: backgroundAsset?.type.startsWith("video/") ? "video" : "image",
       audioUrl: assetUrls[project.audioId],
+      audioNarration: project.audioNarration || "",
       audioVolume: Number(project.audioVolume) / 100,
       voiceVolume: Number(project.voiceVolume ?? 100) / 100,
+      sfxVolume: Number(project.sfxVolume ?? 22) / 100,
+      audioAlignment: project.audioAlignment || [],
       scenes: sceneTimeline.map((scene) => ({
         ...scene,
         voiceUrl: assetUrls[scene.voiceAssetId],
+        visualAssetUrl: assetUrls[scene.visualAssetId],
+        visualAssetType: assets.find((asset) => asset.id === scene.visualAssetId)?.type,
       })),
     }),
-    [project, assetUrls, backgroundAsset, sceneTimeline],
+    [project, assetUrls, assets, backgroundAsset, sceneTimeline],
   );
 
   const regenerateSceneSpeech = async (scene) => {
@@ -519,7 +614,7 @@ INSTRUKSI
     try {
       await navigator.clipboard.writeText(generatedPrompt);
       setPromptVisible(true);
-      setNotice("Prompt disalin. Buka Claude di tab lain dan paste prompt-nya.");
+      setNotice("Prompt disalin. Buka Gemini di tab lain dan paste prompt-nya.");
       setError("");
     } catch (copyError) {
       console.error("Could not copy the prompt to the clipboard.", copyError);
@@ -528,8 +623,8 @@ INSTRUKSI
     }
   };
 
-  const openClaude = () => {
-    window.open("https://claude.ai/new", "_blank", "noopener,noreferrer");
+  const openGemini = () => {
+    window.open("https://gemini.google.com/app", "_blank", "noopener,noreferrer");
   };
 
   const addAssets = async (files, selectRole = "") => {
@@ -560,6 +655,7 @@ INSTRUKSI
       if (selectedAsset && selectRole === "audio") {
         updateProject("audioId", selectedAsset.id);
         updateProject("audioNarration", "");
+        updateProject("audioAlignment", []);
       }
       if (selectedAsset && selectRole === "character") {
         updateProject("characterAssetId", selectedAsset.id);
@@ -600,9 +696,9 @@ INSTRUKSI
   const buildStoryRequest = async (revision) => {
     const characterReference = assets.find((asset) => asset.id === project.characterAssetId);
     let referenceImage;
-    if (characterReference && CLAUDE_IMAGE_TYPES.has(characterReference.type)) {
+    if (characterReference && STORY_IMAGE_TYPES.has(characterReference.type)) {
       if (characterReference.size > 5 * 1024 * 1024) {
-        setNotice("Gambar karakter lebih dari 5 MB; Claude akan memakai character bible tanpa gambar.");
+        setNotice("Gambar karakter lebih dari 5 MB; Gemini akan memakai character bible tanpa gambar.");
       } else {
         referenceImage = {
           mediaType: characterReference.type,
@@ -616,6 +712,13 @@ INSTRUKSI
       [project.backgroundId, "background video"],
       [project.audioId, "audio/voice-over"],
     ]);
+    project.scenes.forEach((scene, index) => {
+      if (scene.visualAssetId) assetRoles.set(scene.visualAssetId, `visual adegan ${index + 1}`);
+    });
+    const contentPreferences = {
+      ...DEFAULT_PROJECT.contentPreferences,
+      ...project.contentPreferences,
+    };
     return {
       brief: project.brief,
       goal: project.goal,
@@ -623,6 +726,7 @@ INSTRUKSI
       platform: project.platform,
       visualStyle: project.visualStyle,
       callToAction: project.callToAction,
+      preferences: contentPreferences,
       character: {
         name: project.characterName,
         description: project.characterDescription,
@@ -648,7 +752,7 @@ INSTRUKSI
       body: JSON.stringify(await buildStoryRequest(revision)),
     });
     const story = await response.json();
-    if (!response.ok) throw new Error(story.error || "Claude gagal membuat cerita.");
+    if (!response.ok) throw new Error(story.error || "Gemini gagal membuat cerita.");
     return story;
   };
 
@@ -661,6 +765,7 @@ INSTRUKSI
       pauseAfterSeconds: index < list.length - 1 ? 0.35 : 0,
       voiceAssetId: "",
       voiceDurationSeconds: 0,
+      voiceAlignment: [],
       id: crypto.randomUUID(),
     }));
     const timedScenes = distributeSceneDurations(scenes, Number(project.durationSeconds) || 15);
@@ -673,6 +778,7 @@ INSTRUKSI
       durationSeconds: Math.ceil(getTimelineDuration(timedScenes)),
       audioId: current.audioNarration ? "" : current.audioId,
       audioNarration: "",
+      audioAlignment: [],
     }));
     return timedScenes;
   };
@@ -689,17 +795,22 @@ INSTRUKSI
     return selectedVoice.id;
   };
 
-  const createSpeechAsset = async (text, voiceId, sceneId) => {
+  const createSpeechAsset = async (text, voiceId, sceneId, voiceDelivery = project.voiceDelivery) => {
     const response = await fetch("/api/ai/speech", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text, voiceId }),
+      body: JSON.stringify({ text, voiceId, voiceDelivery }),
     });
     if (!response.ok) {
       const result = await response.json();
       throw new Error(result.error || "ElevenLabs gagal membuat voice-over.");
     }
-    const blob = await response.blob();
+    const result = await response.json();
+    if (typeof result.audioBase64 !== "string" || !Array.isArray(result.words)) {
+      throw new Error("ElevenLabs mengembalikan audio tanpa data timing yang valid.");
+    }
+    const audioBytes = Uint8Array.from(atob(result.audioBase64), (character) => character.charCodeAt(0));
+    const blob = new Blob([audioBytes], { type: "audio/mpeg" });
     if (blob.size === 0 || !blob.type.startsWith("audio/")) {
       throw new Error("ElevenLabs mengembalikan file audio yang tidak valid.");
     }
@@ -717,7 +828,15 @@ INSTRUKSI
     await saveAsset(asset);
     setAssets((current) => [asset, ...current]);
     setProject((current) => {
-      if (!sceneId) return { ...current, audioId: asset.id, audioNarration: text };
+      if (!sceneId) {
+        return {
+          ...current,
+          audioId: asset.id,
+          audioNarration: text,
+          audioAlignment: result.words,
+          durationSeconds: Math.max(Number(current.durationSeconds) || 1, Math.ceil(durationSeconds)),
+        };
+      }
       const scenes = current.scenes.map((scene) =>
         scene.id === sceneId
           ? {
@@ -725,6 +844,7 @@ INSTRUKSI
               voiceAssetId: asset.id,
               voiceDurationSeconds: durationSeconds,
               voiceText: text,
+              voiceAlignment: result.words,
             }
           : scene,
       );
@@ -738,7 +858,7 @@ INSTRUKSI
     return asset;
   };
 
-  const generateSceneVoices = async (scenes, voiceId) => {
+  const generateSceneVoices = async (scenes, voiceId, voiceDelivery = project.voiceDelivery) => {
     if (scenes.some((scene) => !scene.narration.trim())) {
       throw new Error("Ada adegan yang belum punya narasi. Isi semua beat sebelum membuat voice-over.");
     }
@@ -747,7 +867,7 @@ INSTRUKSI
     for (const scene of scenes) {
       setSpeechProgress({ completed, total: scenes.length });
       setNotice(`Membuat voice-over adegan ${completed + 1} dari ${scenes.length}...`);
-      await createSpeechAsset(scene.narration, voiceId, scene.id);
+      await createSpeechAsset(scene.narration, voiceId, scene.id, voiceDelivery);
       completed += 1;
     }
     setSpeechProgress({ completed, total: scenes.length });
@@ -777,10 +897,53 @@ INSTRUKSI
         }
       }
     } catch (generationError) {
-      console.error("Could not generate the story with Claude.", generationError);
-      setError(generationError.message || "Claude gagal membuat cerita. Periksa setup API dan coba lagi.");
+      console.error("Could not generate the story with Gemini.", generationError);
+      setError(generationError.message || "Gemini gagal membuat cerita. Periksa setup API dan coba lagi.");
     } finally {
       setGeneratingStory(false);
+    }
+  };
+
+  const createOwnScriptScenes = async ({ withVoice = false } = {}) => {
+    const script = project.narration.trim();
+    if (!script) {
+      setError("Tulis atau tempel naskah dulu sebelum menyusun adegan.");
+      return;
+    }
+    if (generatingStory || generatingSpeech) return;
+
+    const scenes = createScenesFromScript(script);
+    if (scenes.length === 0 || scenes.length > 12) {
+      setError("Naskah belum bisa dipecah menjadi adegan yang aman. Coba rapikan paragraf atau tanda bacanya.");
+      return;
+    }
+    const timedScenes = distributeSceneDurations(scenes, Number(project.durationSeconds) || 15);
+    setProject((current) => ({
+      ...current,
+      title: timedScenes[0].onScreenText || current.title,
+      subtitle: "",
+      narration: script,
+      scenes: timedScenes,
+      durationSeconds: Math.ceil(getTimelineDuration(timedScenes)),
+      audioId: current.audioNarration ? "" : current.audioId,
+      audioNarration: "",
+      audioAlignment: [],
+    }));
+    setError("");
+    setNotice(`${timedScenes.length} beat adegan tersusun dari naskah lo. Teks asli tetap dipertahankan.`);
+    if (!withVoice) return;
+
+    setGeneratingSpeech(true);
+    try {
+      const voiceId = await ensureVoiceId();
+      await generateSceneVoices(timedScenes, voiceId, project.voiceDelivery);
+      setNotice("Adegan dari naskah lo sudah disusun dan voice-over-nya siap diedit.");
+    } catch (speechError) {
+      console.error("The user's script was split, but voice-over generation failed.", speechError);
+      setError(`Adegan tetap tersimpan, tapi voice-over belum selesai: ${speechError.message}`);
+    } finally {
+      setGeneratingSpeech(false);
+      setSpeechProgress(null);
     }
   };
 
@@ -859,7 +1022,7 @@ INSTRUKSI
   const generateSpeech = async () => {
     if (generatingSpeech) return;
     if (!project.narration.trim()) {
-      setError("Bikin cerita dengan Claude dulu atau tulis naskah voice-over sebelum generate.");
+      setError("Bikin cerita dengan Gemini dulu atau tulis naskah voice-over sebelum generate.");
       return;
     }
     setGeneratingSpeech(true);
@@ -898,9 +1061,16 @@ INSTRUKSI
 
   const updateScene = (sceneId, key, value) => {
     setProject((current) => {
-      const scenes = current.scenes.map((scene) =>
-        scene.id === sceneId ? { ...scene, [key]: value } : scene,
-      );
+      const scenes = current.scenes.map((scene) => {
+        if (scene.id !== sceneId) return scene;
+        return {
+          ...scene,
+          [key]: value,
+          ...(key === "narration"
+            ? { voiceAssetId: "", voiceDurationSeconds: 0, voiceText: "", voiceAlignment: [] }
+            : {}),
+        };
+      });
       return {
         ...current,
         scenes,
@@ -918,9 +1088,13 @@ INSTRUKSI
       setAssets((current) => current.filter((item) => item.id !== asset.id));
       setProject((current) => {
         const scenes = current.scenes.map((scene) =>
-          scene.voiceAssetId === asset.id
-            ? { ...scene, voiceAssetId: "", voiceDurationSeconds: 0, voiceText: "" }
-            : scene,
+          ({
+            ...scene,
+            ...(scene.voiceAssetId === asset.id
+              ? { voiceAssetId: "", voiceDurationSeconds: 0, voiceText: "", voiceAlignment: [] }
+              : {}),
+            ...(scene.visualAssetId === asset.id ? { visualAssetId: "" } : {}),
+          }),
         );
         return {
           ...current,
@@ -928,6 +1102,7 @@ INSTRUKSI
           characterAssetId: current.characterAssetId === asset.id ? "" : current.characterAssetId,
           audioId: current.audioId === asset.id ? "" : current.audioId,
           audioNarration: current.audioId === asset.id ? "" : current.audioNarration,
+          audioAlignment: current.audioId === asset.id ? [] : current.audioAlignment,
           scenes,
           durationSeconds: scenes.length ? Math.ceil(getTimelineDuration(scenes)) : current.durationSeconds,
         };
@@ -952,10 +1127,11 @@ INSTRUKSI
           project.backgroundId,
           project.audioId,
           ...project.scenes.map((scene) => scene.voiceAssetId),
+          ...project.scenes.map((scene) => scene.visualAssetId),
         ].filter(Boolean)),
       ];
-      if (selectedIds.length > 15) {
-        throw new Error("Render mendukung maksimal 15 aset terpilih sekaligus.");
+      if (selectedIds.length > 27) {
+        throw new Error("Render mendukung maksimal 27 aset terpilih sekaligus (maksimal 12 adegan, masing-masing dengan voice dan visual).");
       }
       const selectedAssets = selectedIds.map((id) => assets.find((asset) => asset.id === id));
       if (!Number.isSafeInteger(Number(project.durationSeconds)) || Number(project.durationSeconds) <= 0) {
@@ -984,6 +1160,9 @@ INSTRUKSI
           scenes: project.scenes,
           audioVolume: Number(project.audioVolume) / 100,
           voiceVolume: Number(project.voiceVolume ?? 100) / 100,
+          sfxVolume: Number(project.sfxVolume ?? 22) / 100,
+          audioAlignment: project.audioAlignment || [],
+          audioNarration: project.audioNarration || "",
           characterAssetId: project.characterAssetId,
           backgroundId: project.backgroundId,
           audioId: project.audioId,
@@ -1075,10 +1254,10 @@ INSTRUKSI
         </div>
       )}
 
-      {aiStatus && !aiStatus.unavailable && (!aiStatus.claudeConfigured || !aiStatus.elevenLabsConfigured) && (
+      {aiStatus && !aiStatus.unavailable && (!aiStatus.aiConfigured || !aiStatus.elevenLabsConfigured) && (
         <div className="api-setup-note">
-          <strong>Setup satu kali:</strong> copy <code>.env.example</code> jadi <code>.env.local</code>, isi API key
-          {aiStatus.claudeConfigured ? null : " Anthropic"}{!aiStatus.claudeConfigured && !aiStatus.elevenLabsConfigured ? " dan" : ""}
+          <strong>Setup satu kali:</strong> buat <code>.env.local</code>, isi API key
+          {aiStatus.aiConfigured ? null : ` ${aiStatus.aiProvider === "anthropic" ? "Anthropic" : "Gemini"}`}{!aiStatus.aiConfigured && !aiStatus.elevenLabsConfigured ? " dan" : ""}
           {aiStatus.elevenLabsConfigured ? null : " ElevenLabs"}, lalu restart <code>npm run dev</code>. Key hanya dibaca server lokal.
         </div>
       )}
@@ -1237,7 +1416,7 @@ INSTRUKSI
               })}
             </div>
           ) : (
-            <div className="empty-assets"><AudioLines size={17} /><span>Upload aset tersimpan lokal di browser; file tidak otomatis terkirim ke Claude.</span></div>
+            <div className="empty-assets"><AudioLines size={17} /><span>Upload aset tersimpan lokal di browser; hanya gambar karakter pilihan yang dikirim ke Gemini sebagai referensi.</span></div>
           )}
         </aside>
 
@@ -1260,8 +1439,28 @@ INSTRUKSI
           <div className="panel idea-panel">
             <div className="brief-heading">
               <span className="mini-eyebrow"><WandSparkles size={12} /> BRIEF TERPANDU · SEKALI GENERATE</span>
-              <span className="brief-helper">Makin spesifik brief-nya, makin dekat draft pertama ke bayangan lo.</span>
+              <span className="brief-helper">Pilih mulai dari ide Gemini atau pakai naskah lo sendiri. Hasilnya tetap bisa diedit dan dirender di sini.</span>
             </div>
+            <div className="creation-mode-tabs" role="group" aria-label="Pilih cara mulai video">
+              <button
+                type="button"
+                className={`creation-mode-tab ${project.creationMode === "idea" ? "is-active" : ""}`}
+                aria-pressed={project.creationMode === "idea"}
+                onClick={() => updateProject("creationMode", "idea")}
+              >
+                <WandSparkles size={14} /> Dari ide
+              </button>
+              <button
+                type="button"
+                className={`creation-mode-tab ${project.creationMode === "script" ? "is-active" : ""}`}
+                aria-pressed={project.creationMode === "script"}
+                onClick={() => updateProject("creationMode", "script")}
+              >
+                <MessageSquareText size={14} /> Naskah sendiri
+              </button>
+            </div>
+            {project.creationMode === "idea" ? (
+              <>
             <label className="edit-field">
               <span>IDE CERITA / INSTRUKSI KREATIF</span>
               <textarea
@@ -1335,16 +1534,97 @@ INSTRUKSI
               </label>
             </div>
             <div className="idea-footer">
-              <span>Claude bikin cerita + variasi visual adegan; ElevenLabs bikin suara dan langsung masuk library. Pemakaian API berlaku.</span>
+              <span>Gemini bikin draft sesuai karakter dan preferensi lo; ElevenLabs bikin voice per adegan. Pemakaian API berlaku.</span>
               <button
                 className="button button-primary button-small"
                 onClick={() => generateStory({ withVoice: true })}
                 disabled={generatingStory || generatingSpeech || !loaded}
               >
                 {generatingStory || generatingSpeech ? <LoaderCircle className="loading-spinner-icon" size={14} /> : <WandSparkles size={14} />}
-                {generatingStory ? "Claude bikin cerita..." : generatingSpeech ? "Bikin voice-over..." : "Buat cerita + suara"}
+                {generatingStory ? "Gemini bikin cerita..." : generatingSpeech ? "Bikin voice-over..." : "Buat cerita + suara"}
               </button>
             </div>
+              </>
+            ) : (
+              <div className="manual-script-panel">
+                <label className="edit-field">
+                  <span>NASKAH CERITA / VOICE-OVER <b>{project.narration.length}/5000</b></span>
+                  <textarea
+                    className="text-input"
+                    rows={6}
+                    maxLength={5000}
+                    value={project.narration}
+                    onChange={(event) => updateProject("narration", event.target.value)}
+                    placeholder="Tempel naskah final lo di sini. Kalimat/paragraf akan disusun menjadi beat adegan; kata-katanya tetap milik lo."
+                  />
+                </label>
+                <div className="manual-script-actions">
+                  <button
+                    type="button"
+                    className="button button-quiet"
+                    onClick={() => createOwnScriptScenes()}
+                    disabled={generatingSpeech || generatingStory || !project.narration.trim()}
+                  >
+                    <Clapperboard size={14} /> Susun adegan dulu
+                  </button>
+                  <button
+                    type="button"
+                    className="button button-primary"
+                    onClick={() => createOwnScriptScenes({ withVoice: true })}
+                    disabled={generatingSpeech || generatingStory || !project.narration.trim()}
+                  >
+                    {generatingSpeech ? <LoaderCircle className="loading-spinner-icon" size={14} /> : <Mic2 size={14} />}
+                    {generatingSpeech ? "Bikin voice per adegan..." : "Susun adegan + buat suara"}
+                  </button>
+                </div>
+                <small className="manual-script-note">Susun adegan berjalan lokal tanpa AI. Voice-over memakai ElevenLabs per adegan; lo bisa cek dan edit draft sebelum generate.</small>
+              </div>
+            )}
+            <details className="content-preferences">
+              <summary>
+                <span><WandSparkles size={13} /> Preferensi hasil</span>
+                <small>Disimpan bersama project · bikin output lebih khas lo</small>
+              </summary>
+              <div className="preference-grid">
+                <label className="edit-field">
+                  <span>GAYA NULIS</span>
+                  <select className="text-input" value={contentPreferences.writingStyle} onChange={(event) => updateContentPreference("writingStyle", event.target.value)}>
+                    <option value="conversational">Percakapan natural</option>
+                    <option value="direct">To the point</option>
+                    <option value="warm-story">Storytelling hangat</option>
+                    <option value="documentary">Dokumenter / informatif</option>
+                  </select>
+                </label>
+                <label className="edit-field">
+                  <span>ENERGI</span>
+                  <select className="text-input" value={contentPreferences.energy} onChange={(event) => updateContentPreference("energy", event.target.value)}>
+                    <option value="calm">Tenang</option>
+                    <option value="balanced">Seimbang</option>
+                    <option value="high">Enerjik</option>
+                  </select>
+                </label>
+                <label className="edit-field">
+                  <span>HUMOR</span>
+                  <select className="text-input" value={contentPreferences.humor} onChange={(event) => updateContentPreference("humor", event.target.value)}>
+                    <option value="none">Serius, tanpa humor</option>
+                    <option value="light">Humor tipis</option>
+                    <option value="playful">Playful</option>
+                    <option value="dry">Dry humor</option>
+                  </select>
+                </label>
+                <label className="edit-field preference-wide">
+                  <span>HINDARI KATA / KALIMAT KLISÉ <b>OPSIONAL</b></span>
+                  <input
+                    className="text-input"
+                    maxLength={500}
+                    value={contentPreferences.avoidPhrases}
+                    onChange={(event) => updateContentPreference("avoidPhrases", event.target.value)}
+                    placeholder="Contoh: pernah nggak sih, di era sekarang, yuk..."
+                  />
+                </label>
+              </div>
+              <small>Untuk mode naskah sendiri, teks yang lo tulis nggak akan diubah AI.</small>
+            </details>
           </div>
 
           <div className={`preview-stage ${project.format === "landscape" ? "landscape" : ""}`}>
@@ -1433,15 +1713,34 @@ INSTRUKSI
                   />
                 </label>
               )}
+              {project.scenes.length > 0 && (
+                <label className="edit-field edit-field-wide audio-control">
+                  <span><AudioLines size={12} /> SFX ADEGAN <b>{project.sfxVolume ?? 22}%</b></span>
+                  <input
+                    type="range"
+                    min="0"
+                    max="60"
+                    value={project.sfxVolume ?? 22}
+                    onChange={(event) => updateProject("sfxVolume", Number(event.target.value))}
+                    style={{ "--range-progress": `${((project.sfxVolume ?? 22) / 60) * 100}%` }}
+                  />
+                  <small className="field-note">Efek whoosh, pop, dan sparkle otomatis mengikuti pergantian adegan. Geser ke 0 untuk mute.</small>
+                </label>
+              )}
             </div>
           </div>
 
           {project.scenes.length > 0 && (
             <div className="panel scenes-panel">
               <div className="scenes-heading">
-                <div><span className="mini-eyebrow">HASIL CLAUDE · AUTO-SAVE</span><h3>{project.scenes.length} adegan · siap diedit</h3></div>
-                <button className="button button-quiet button-small" onClick={() => generateStory({ withVoice: true })} disabled={generatingStory || generatingSpeech}>
-                  <WandSparkles size={13} /> Generate ulang
+                <div><span className="mini-eyebrow">{project.creationMode === "script" ? "NASKAH LO" : "HASIL AI"} · AUTO-SAVE</span><h3>{project.scenes.length} adegan · siap diedit</h3></div>
+                <button
+                  className="button button-quiet button-small"
+                  onClick={() => project.creationMode === "script" ? createOwnScriptScenes() : generateStory({ withVoice: true })}
+                  disabled={generatingStory || generatingSpeech}
+                >
+                  {project.creationMode === "script" ? <Clapperboard size={13} /> : <WandSparkles size={13} />}
+                  {project.creationMode === "script" ? "Susun ulang" : "Generate ulang"}
                 </button>
               </div>
               <div className="revision-tools">
@@ -1506,17 +1805,6 @@ INSTRUKSI
                 </div>
                 <small className="timeline-footnote">Jeda menahan visual antaradegan. Durasi slot otomatis memanjang jika voice-over lebih panjang.</small>
               </div>
-              <label className="edit-field narration-field">
-                <span>NASKAH CERITA LENGKAP</span>
-                <textarea
-                  className="text-input"
-                  rows={5}
-                  maxLength={5000}
-                  value={project.narration}
-                  onChange={(event) => updateProject("narration", event.target.value)}
-                  placeholder="Naskah hasil Claude — bisa diedit sendiri."
-                />
-              </label>
               <div className="scene-list">
                 {project.scenes.map((scene, index) => (
                   <div className="scene-card" key={scene.id}>
@@ -1565,6 +1853,19 @@ INSTRUKSI
                             <option value="cinematic">Cinematic</option>
                             <option value="sticker">Sticker pop</option>
                             <option value="poster">Poster</option>
+                          </select>
+                        </label>
+                        <label className="edit-field">
+                          <span>ASET ADEGAN</span>
+                          <select
+                            className="text-input"
+                            value={scene.visualAssetId || ""}
+                            onChange={(event) => updateScene(scene.id, "visualAssetId", event.target.value)}
+                          >
+                            <option value="">Pakai background utama</option>
+                            {assets.filter((asset) => asset.type.startsWith("image/") || asset.type.startsWith("video/")).map((asset) => (
+                              <option value={asset.id} key={asset.id}>{asset.name}</option>
+                            ))}
                           </select>
                         </label>
                         <label className="edit-field">
@@ -1658,27 +1959,55 @@ INSTRUKSI
                   ))}
                 </select>
               </label>
+              {selectedVoice?.previewUrl ? (
+                <div className="voice-preview-control">
+                  <span className="mini-eyebrow">CONTOH SUARA</span>
+                  <audio controls preload="none" src={selectedVoice.previewUrl}>
+                    Browser tidak mendukung preview audio.
+                  </audio>
+                </div>
+              ) : null}
               <label className="edit-field">
-                <span>NASKAH SUARA <b>{project.narration.length}/5000</b></span>
-                <textarea
+                <span>GAYA PENYAMPAIAN VOICE</span>
+                <select
                   className="text-input"
-                  rows={3}
-                  maxLength={5000}
-                  value={project.narration}
-                  onChange={(event) => updateProject("narration", event.target.value)}
-                  placeholder="Generate cerita dengan Claude dulu, atau tulis teks voice-over sendiri."
-                />
+                  value={project.voiceDelivery || "natural"}
+                  onChange={(event) => updateProject("voiceDelivery", event.target.value)}
+                >
+                  <option value="natural">Natural · stabil dan santai</option>
+                  <option value="expressive">Ekspresif · lebih hidup</option>
+                  <option value="calm">Tenang · lebih konsisten</option>
+                </select>
+                <small className="field-note">Pilih satu gaya, preview contoh suara, lalu generate. Pengaturan dipakai di setiap klip baru.</small>
               </label>
+              {project.scenes.length === 0 && project.creationMode === "idea" ? (
+                <label className="edit-field">
+                  <span>NASKAH SUARA <b>{project.narration.length}/5000</b></span>
+                  <textarea
+                    className="text-input"
+                    rows={3}
+                    maxLength={5000}
+                    value={project.narration}
+                    onChange={(event) => updateProject("narration", event.target.value)}
+                    placeholder="Tulis naskah voice-over sendiri atau buat cerita dengan Gemini."
+                  />
+                </label>
+              ) : null}
               <button
                 className="button button-primary tts-generate"
                 onClick={generateSpeech}
                 disabled={generatingSpeech || !project.narration.trim()}
               >
                 {generatingSpeech ? <LoaderCircle className="loading-spinner-icon" size={15} /> : <Mic2 size={15} />}
-                {generatingSpeech ? "Membuat voice-over..." : "Generate voice-over"}
+                {generatingSpeech ? "Membuat voice-over..." : project.scenes.length > 0 ? "Generate voice per adegan" : "Generate voice-over penuh"}
               </button>
             </div>
-            <p className="tts-footnote">Voice dibuat per adegan supaya timing bisa diatur. Generate satu kali memanggil ElevenLabs untuk setiap adegan; penggunaan dihitung dari teks dan kuota akun.</p>
+            <p className="tts-footnote">
+              {project.scenes.length > 0
+                ? "Voice dibuat per adegan; satu klip berarti satu panggilan ElevenLabs. Edit naskah adegan sebelum membuat ulang."
+                : "Pilih voice dan gaya, lalu generate naskah sebagai satu klip. Untuk mengatur timing per adegan, susun naskah menjadi adegan dulu."}{" "}
+              Pemakaian dihitung dari teks dan kuota akun.
+            </p>
           </div>
 
           <div className="panel preflight-panel">
@@ -1738,11 +2067,11 @@ INSTRUKSI
 
           {promptVisible && (
             <div className="panel prompt-panel">
-              <div className="prompt-heading"><div><span className="mini-eyebrow">CLAUDE PROMPT</span><h3>Siap dipakai di Claude</h3></div><button className="icon-button" onClick={copyPrompt} title="Salin prompt"><Copy size={15} /></button></div>
-              <textarea className="prompt-output" value={generatedPrompt} readOnly rows={13} aria-label="Prompt untuk Claude" />
+              <div className="prompt-heading"><div><span className="mini-eyebrow">GEMINI PROMPT</span><h3>Siap dipakai di Gemini</h3></div><button className="icon-button" onClick={copyPrompt} title="Salin prompt"><Copy size={15} /></button></div>
+              <textarea className="prompt-output" value={generatedPrompt} readOnly rows={13} aria-label="Prompt untuk Gemini" />
               <div className="prompt-footer">
-                <span>Prompt berisi detail aset; lampirkan file-nya sendiri di Claude bila perlu.</span>
-                <button className="button button-primary button-small" onClick={openClaude}><ExternalLink size={14} /> Buka Claude</button>
+                <span>Prompt berisi detail aset; lampirkan file-nya sendiri di Gemini bila perlu.</span>
+                <button className="button button-primary button-small" onClick={openGemini}><ExternalLink size={14} /> Buka Gemini</button>
               </div>
             </div>
           )}

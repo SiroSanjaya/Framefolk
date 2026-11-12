@@ -9,7 +9,7 @@ import { pipeline } from "node:stream/promises";
 
 const MAX_FILE_BYTES = 150 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 300 * 1024 * 1024;
-const MAX_RENDER_ASSETS = 15;
+const MAX_RENDER_ASSETS = 27;
 const SCENE_VISUAL_TYPES = new Set(["hero", "split", "quote", "punchline", "cinematic", "sticker", "poster"]);
 const SCENE_MOTIONS = new Set(["rise", "drift", "zoom", "pop", "reveal"]);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -127,6 +127,37 @@ const validateProject = (project) => {
   ) {
     throw new RequestError("Voice-over volume must be between 0 and 1.");
   }
+  if (
+    project.sfxVolume !== undefined &&
+    (typeof project.sfxVolume !== "number" || project.sfxVolume < 0 || project.sfxVolume > 1)
+  ) {
+    throw new RequestError("Scene SFX volume must be between 0 and 1.");
+  }
+  if (
+    project.audioNarration !== undefined &&
+    (typeof project.audioNarration !== "string" || project.audioNarration.length > 5000)
+  ) {
+    throw new RequestError("The full voice-over narration is invalid or too long.");
+  }
+  if (project.audioAlignment !== undefined) {
+    if (!Array.isArray(project.audioAlignment) || project.audioAlignment.length > 2000) {
+      throw new RequestError("The full voice-over alignment is invalid or too large.");
+    }
+    for (const word of project.audioAlignment) {
+      if (
+        !word ||
+        typeof word.word !== "string" ||
+        word.word.length === 0 ||
+        word.word.length > 100 ||
+        !Number.isFinite(word.startSeconds) ||
+        !Number.isFinite(word.endSeconds) ||
+        word.startSeconds < 0 ||
+        word.endSeconds < word.startSeconds
+      ) {
+        throw new RequestError("One of the full voice-over timing entries is invalid.");
+      }
+    }
+  }
 
   const assetFields = ["backgroundId", "characterAssetId", "audioId"];
   for (const field of assetFields) {
@@ -162,12 +193,38 @@ const validateProject = (project) => {
     ) {
       throw new RequestError("One of the scene voice-over selections is invalid.");
     }
+    if (
+      scene.visualAssetId !== undefined &&
+      scene.visualAssetId !== "" &&
+      !UUID_PATTERN.test(scene.visualAssetId)
+    ) {
+      throw new RequestError("One of the scene visual asset selections is invalid.");
+    }
     for (const field of ["durationSeconds", "voiceDurationSeconds", "pauseAfterSeconds"]) {
       if (
         scene[field] !== undefined &&
         (typeof scene[field] !== "number" || !Number.isFinite(scene[field]) || scene[field] < 0 || scene[field] > 86400)
       ) {
         throw new RequestError(`One of the scene ${field} values is invalid.`);
+      }
+    }
+    if (scene.voiceAlignment !== undefined) {
+      if (!Array.isArray(scene.voiceAlignment) || scene.voiceAlignment.length > 2000) {
+        throw new RequestError("One of the scene voice-over alignments is invalid or too large.");
+      }
+      for (const word of scene.voiceAlignment) {
+        if (
+          !word ||
+          typeof word.word !== "string" ||
+          word.word.length === 0 ||
+          word.word.length > 100 ||
+          !Number.isFinite(word.startSeconds) ||
+          !Number.isFinite(word.endSeconds) ||
+          word.startSeconds < 0 ||
+          word.endSeconds < word.startSeconds
+        ) {
+          throw new RequestError("One of the scene voice-over timing entries is invalid.");
+        }
       }
     }
   }
@@ -186,7 +243,7 @@ const readMultipart = (request, temporaryDirectory) =>
     const parser = Busboy({
       headers: request.headers,
       limits: {
-        fieldSize: 64 * 1024,
+        fieldSize: 256 * 1024,
         fields: 1,
         fileSize: MAX_FILE_BYTES,
         files: MAX_RENDER_ASSETS,
@@ -307,10 +364,19 @@ const makeRenderProps = (project, uploaded, publicDirectory, renderId) => {
       characterImagePath: resolveAsset(project.characterAssetId, "image/"),
       title: project.title,
       subtitle: project.subtitle,
-      scenes: project.scenes.map((scene) => ({
-        ...scene,
-        voiceAssetPath: resolveAsset(scene.voiceAssetId, "audio/"),
-      })),
+      scenes: project.scenes.map((scene) => {
+        const visualAssetPath = resolveAsset(scene.visualAssetId);
+        const visualAssetType = scene.visualAssetId ? uploaded.get(scene.visualAssetId)?.type : undefined;
+        if (visualAssetType && !/^(image|video)\//.test(visualAssetType)) {
+          throw new RequestError("A scene visual asset must be an image or video.");
+        }
+        return {
+          ...scene,
+          voiceAssetPath: resolveAsset(scene.voiceAssetId, "audio/"),
+          visualAssetPath,
+          visualAssetType,
+        };
+      }),
       accent: project.accent,
       visualStyle: project.visualStyle,
       backgroundAssetPath: backgroundUrl,
@@ -320,8 +386,11 @@ const makeRenderProps = (project, uploaded, publicDirectory, renderId) => {
           : "image"
         : undefined,
       audioAssetPath: resolveAsset(project.audioId, "audio/"),
+      audioNarration: project.audioNarration || "",
+      audioAlignment: project.audioAlignment || [],
       audioVolume: project.audioVolume,
       voiceVolume: project.voiceVolume ?? 1,
+      sfxVolume: project.sfxVolume ?? 0.22,
       durationInFrames: project.durationSeconds * 30,
       compositionWidth: project.format === "portrait" ? 1080 : 1920,
       compositionHeight: project.format === "portrait" ? 1920 : 1080,

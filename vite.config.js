@@ -7,6 +7,9 @@ import { renderPlugin } from "./src/server/renderMiddleware.js";
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   for (const key of [
+    "AI_PROVIDER",
+    "GEMINI_API_KEY",
+    "GEMINI_MODEL",
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_MODEL",
     "ELEVENLABS_API_KEY",
