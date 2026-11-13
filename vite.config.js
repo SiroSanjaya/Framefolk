@@ -11,9 +11,11 @@ export default defineConfig(({ mode }) => {
     "GEMINI_API_KEY",
     "GEMINI_MODEL",
     "GEMINI_IMAGE_MODEL",
+    "PEXELS_API_KEY",
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_MODEL",
     "ELEVENLABS_API_KEY",
+    "ELEVENLABS_MODEL",
     "ELEVENLABS_VOICE_ID",
   ]) {
     if (!process.env[key] && env[key]) process.env[key] = env[key];

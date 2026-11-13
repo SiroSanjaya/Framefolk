@@ -2,10 +2,17 @@ const DB_NAME = "framefolk-assets";
 const STORE_NAME = "assets";
 const DB_VERSION = 1;
 
-const openDatabase = () =>
-  new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
+const getDatabaseName = (userId) => {
+  if (!userId) return DB_NAME;
+  if (!/^[a-z0-9-]{1,80}$/i.test(userId)) {
+    throw new Error("Invalid account identifier for local asset storage.");
+  }
+  return `${DB_NAME}-${userId}`;
+};
 
+const openScopedDatabase = (userId) =>
+  new Promise((resolve, reject) => {
+    const request = indexedDB.open(getDatabaseName(userId), DB_VERSION);
     request.onupgradeneeded = () => {
       request.result.createObjectStore(STORE_NAME, { keyPath: "id" });
     };
@@ -13,8 +20,8 @@ const openDatabase = () =>
     request.onerror = () => reject(request.error);
   });
 
-export const getAssets = async () => {
-  const database = await openDatabase();
+export const getAssets = async (userId) => {
+  const database = await openScopedDatabase(userId);
   return new Promise((resolve, reject) => {
     const request = database.transaction(STORE_NAME).objectStore(STORE_NAME).getAll();
     request.onsuccess = () => resolve(request.result);
@@ -22,8 +29,8 @@ export const getAssets = async () => {
   });
 };
 
-export const saveAsset = async (asset) => {
-  const database = await openDatabase();
+export const saveAsset = async (asset, userId) => {
+  const database = await openScopedDatabase(userId);
   return new Promise((resolve, reject) => {
     const transaction = database.transaction(STORE_NAME, "readwrite");
     transaction.objectStore(STORE_NAME).put(asset);
@@ -32,8 +39,8 @@ export const saveAsset = async (asset) => {
   });
 };
 
-export const deleteAsset = async (id) => {
-  const database = await openDatabase();
+export const deleteAsset = async (id, userId) => {
+  const database = await openScopedDatabase(userId);
   return new Promise((resolve, reject) => {
     const transaction = database.transaction(STORE_NAME, "readwrite");
     transaction.objectStore(STORE_NAME).delete(id);

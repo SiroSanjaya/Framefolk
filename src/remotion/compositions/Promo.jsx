@@ -14,6 +14,27 @@ import {
 
 const wordCount = (value) => (value?.trim().match(/\S+/g) ?? []).length;
 
+const getSubtitleCues = (text) => {
+  const sentences = text.match(/[^.!?…。！？]+[.!?…。！？]+|[^.!?…。！？]+$/gu) ?? [];
+  const cues = [];
+  for (const sentence of sentences) {
+    let words = [];
+    let line = "";
+    for (const word of sentence.trim().split(/\s+/).filter(Boolean)) {
+      const nextLine = line ? `${line} ${word}` : word;
+      if (line && (words.length >= 7 || nextLine.length > 42)) {
+        cues.push({ text: line, wordCount: words.length });
+        words = [];
+        line = "";
+      }
+      words.push(word);
+      line = line ? `${line} ${word}` : word;
+    }
+    if (line) cues.push({ text: line, wordCount: words.length });
+  }
+  return cues;
+};
+
 const getIllustrationTheme = (text) => {
   const value = text.toLowerCase();
   if (/kopi|teh|makan|masak|lapar|roti|kue|minum|restoran|makanan/u.test(value)) return "food";
@@ -478,11 +499,40 @@ const PromoComposition = ({
   const sceneFrame = frame - sceneStart;
   const enterFrames = Math.max(1, Math.min(20, sceneDuration / 2));
   const sceneOpacity = interpolate(sceneFrame, [0, enterFrames], [0, 1], { extrapolateRight: "clamp" });
-  const idleMotion = Math.sin((frame / fps) * 3.1);
+  const sceneProgress = Math.max(0, Math.min(1, sceneFrame / Math.max(1, sceneDuration)));
+  const cameraProgress = Easing.inOut(Easing.cubic)(sceneProgress);
+  const cameraDirection = currentScene?.motionDirection || ["left", "right", "up", "down"][Math.max(0, sceneIndex) % 4];
+  const cameraMoves = {
+    left: { fromX: 2.4, toX: -2.4, fromY: 0, toY: 0 },
+    right: { fromX: -2.4, toX: 2.4, fromY: 0, toY: 0 },
+    up: { fromX: 0, toX: 0, fromY: 2.2, toY: -2.2 },
+    down: { fromX: 0, toX: 0, fromY: -2.2, toY: 2.2 },
+    center: { fromX: 0, toX: 0, fromY: 0, toY: 0 },
+  };
+  const cameraMove = cameraMoves[cameraDirection] || cameraMoves.center;
+  const cameraPanX = interpolate(cameraProgress, [0, 1], [cameraMove.fromX, cameraMove.toX]);
+  const cameraPanY = interpolate(cameraProgress, [0, 1], [cameraMove.fromY, cameraMove.toY]);
+  const zoomIn = ["depth", "burst", "kinetic-type"].includes(currentScene?.motionStyle) || sceneIndex % 2 === 0;
+  const cameraScale = interpolate(
+    cameraProgress,
+    [0, 1],
+    zoomIn ? [1.035, 1.145] : [1.145, 1.035],
+  );
+  const cameraTilt = Math.sin(cameraProgress * Math.PI) * (cameraDirection === "left" ? 0.35 : cameraDirection === "right" ? -0.35 : 0);
+  const idleMotion = Math.sin((sceneFrame / fps) * 4.2 + Math.max(0, sceneIndex) * 1.4);
   const fallbackWords = (currentScene?.narration || audioNarration || "").trim().split(/\s+/).filter(Boolean);
-  const alignedWords = Array.isArray(currentScene?.voiceAlignment)
-    ? currentScene.voiceAlignment
-    : Array.isArray(audioAlignment) ? audioAlignment : [];
+  const sceneHasCurrentVoice = Boolean(
+    currentScene?.voiceAssetId &&
+    currentScene.voiceText === currentScene.narration,
+  );
+  const hasCurrentNarrationAudio = currentScene
+    ? sceneHasCurrentVoice
+    : Boolean(audioNarration && (audioAssetPath || audioUrl));
+  const alignedWords = hasCurrentNarrationAudio
+    ? Array.isArray(currentScene?.voiceAlignment)
+      ? currentScene.voiceAlignment
+      : Array.isArray(audioAlignment) ? audioAlignment : []
+    : [];
   const sceneElapsedSeconds = currentScene ? sceneFrame / fps : frame / fps;
   const activeVoiceDuration = currentScene
     ? Number(currentScene.voiceDurationSeconds) || currentScene.activeDuration
@@ -509,16 +559,28 @@ const PromoComposition = ({
   const captionWords = alignedWords.length > 0
     ? alignedWords.map((item) => item.word)
     : fallbackWords;
-  const captionStart = Math.max(0, spokenWordIndex - 2);
+  const captionStart = Math.max(0, spokenWordIndex - 1);
   const captionEnd = spokenWordIndex < 0
     ? 0
-    : Math.min(captionWords.length, spokenWordIndex + 4);
-  const hasCaptionAudio = currentScene ? Boolean(currentScene.voiceAssetId) : Boolean(audioNarration);
-  const speechCaptionWords = hasCaptionAudio
-    ? captionWords.slice(captionStart, captionEnd)
-    : [];
+    : Math.min(captionWords.length, spokenWordIndex + 3);
+  const speechCaptionWords = captionWords.slice(captionStart, captionEnd);
+  const subtitleDuration = currentScene ? currentScene.activeDuration : durationInFrames / fps;
+  const subtitleCues = alignedWords.length > 0
+    ? []
+    : getSubtitleCues(currentScene?.narration || audioNarration || "");
+  const totalCueWords = subtitleCues.reduce((total, cue) => total + cue.wordCount, 0);
+  let cueWordOffset = 0;
+  const fallbackSubtitle = subtitleCues.find((cue) => {
+    const cueStart = (cueWordOffset / Math.max(1, totalCueWords)) * subtitleDuration;
+    cueWordOffset += cue.wordCount;
+    const cueEnd = (cueWordOffset / Math.max(1, totalCueWords)) * subtitleDuration;
+    return sceneElapsedSeconds >= cueStart && sceneElapsedSeconds < cueEnd;
+  })?.text;
+  const visibleSubtitle = alignedWords.length > 0
+    ? speechCaptionWords.map((word) => word.trim()).filter(Boolean).join(" ")
+    : fallbackSubtitle;
   const isSpeaking = currentScene
-    ? Boolean(currentScene.voiceAssetId) && sceneFrame < activeVoiceDuration * fps
+    ? sceneHasCurrentVoice && sceneFrame < activeVoiceDuration * fps
     : Boolean(audioNarration && (audioAssetPath || audioUrl)) && frame < activeVoiceDuration * fps;
   const spokenWord = activeAlignedWord >= 0 ? alignedWords[activeAlignedWord] : undefined;
   const estimatedWordDuration = fallbackWords.length > 0 ? activeVoiceDuration / fallbackWords.length : 0;
@@ -532,9 +594,13 @@ const PromoComposition = ({
   const spokenWordText = spokenWord?.word || fallbackWords[spokenWordIndex] || "";
   const syllableCount = Math.max(1, spokenWordText.match(/[aiueo]+/giu)?.length || 1);
   const isOnActiveWord = alignedWords.length > 0 ? activeAlignedWord >= 0 : spokenWordIndex >= 0;
-  const mouthOpen = isSpeaking && isOnActiveWord &&
+  const isActing = isSpeaking || Boolean(visibleSubtitle);
+  const mouthOpen = isActing && isOnActiveWord &&
     Math.sin(wordProgress * Math.PI * syllableCount * 2) > -0.15;
-  const talkingGesture = isSpeaking ? Math.sin(sceneFrame * 0.16) * 22 : Math.sin(frame * 0.045) * 5;
+  const talkingGesture = isActing
+    ? Math.sin(sceneFrame * 0.2) * 28
+    : Math.sin(sceneFrame * 0.08) * 9;
+  const characterSway = Math.sin((sceneFrame / fps) * 2.8 + Math.max(0, sceneIndex) * 1.7);
   const motionPreset = currentScene?.motionPreset || "rise";
   const characterEntranceX = {
     rise: 0,
@@ -565,10 +631,23 @@ const PromoComposition = ({
   const resolvedSceneVisualUrl = currentScene?.visualAssetPath
     ? staticFile(currentScene.visualAssetPath)
     : currentScene?.visualAssetUrl;
+  const hasSceneVisual = Boolean(
+    resolvedSceneVisualUrl &&
+    (currentScene?.visualAssetType?.startsWith("image/") || currentScene?.visualAssetType?.startsWith("video/")),
+  );
   const resolvedSfxVolume = Math.max(0, Math.min(1, Number(sfxVolume) || 0));
   const illustrationTheme = getIllustrationTheme(
     `${currentScene?.label || ""} ${currentScene?.visualDescription || ""} ${currentScene?.narration || ""}`,
   );
+  const sceneAtmosphere = {
+    food: "#d77d45",
+    learning: "#779de2",
+    journey: "#5e90b3",
+    product: "#67b38a",
+    social: "#a578dc",
+    feeling: "#db6f91",
+    idea: accent,
+  }[illustrationTheme] || accent;
   const motionStyles = ["kinetic-type", "orbit", "depth", "burst", "diagram", "fluid"];
   const motionStyle = currentScene?.motionStyle || motionStyles[Math.max(0, sceneIndex) % motionStyles.length];
 
@@ -610,13 +689,21 @@ const PromoComposition = ({
     poster: { alignItems: "flex-start", justifyContent: "center", textAlign: "left", maxWidth: "58%" },
   }[visualType] || { alignItems: "flex-start", justifyContent: "center", textAlign: "left", maxWidth: "59%" };
   const resolvedCopyPosition = isPortrait ? portraitCopyPosition : copyPosition;
-  const styleTreatment = {
+  const styleTreatment = (hasSceneVisual ? {
+    cinematic: "linear-gradient(180deg, rgba(7,9,12,.06), rgba(7,9,12,.62))",
+    minimal: "linear-gradient(115deg, rgba(13,15,14,.58), rgba(13,15,14,.08))",
+    comic: "radial-gradient(circle at 85% 20%, rgba(255,255,255,.16) 0 2px, transparent 2.5px) 0 0 / 18px 18px, linear-gradient(115deg, rgba(11,12,16,.6), rgba(11,12,16,.12))",
+    "warm-documentary": "linear-gradient(115deg, rgba(31,18,12,.52), rgba(16,12,10,.1))",
+    "playful-editorial": "linear-gradient(115deg, rgba(9,12,10,.58), rgba(9,12,10,.08))",
+  } : {
     cinematic: "linear-gradient(180deg, rgba(7,9,12,.12), rgba(7,9,12,.92))",
     minimal: "linear-gradient(115deg, rgba(13,15,14,.91), rgba(13,15,14,.54))",
     comic: "radial-gradient(circle at 85% 20%, rgba(255,255,255,.16) 0 2px, transparent 2.5px) 0 0 / 18px 18px, linear-gradient(115deg, rgba(11,12,16,.91), rgba(11,12,16,.48))",
     "warm-documentary": "linear-gradient(115deg, rgba(31,18,12,.84), rgba(16,12,10,.5))",
     "playful-editorial": "linear-gradient(115deg, rgba(9,12,10,.89), rgba(9,12,10,.42))",
-  }[visualStyle] || "linear-gradient(115deg, rgba(9,12,10,.89), rgba(9,12,10,.42))";
+  })[visualStyle] || (hasSceneVisual
+    ? "linear-gradient(115deg, rgba(9,12,10,.58), rgba(9,12,10,.08))"
+    : "linear-gradient(115deg, rgba(9,12,10,.89), rgba(9,12,10,.42))");
 
   return (
     <AbsoluteFill style={{ backgroundColor: "#101310", color: "#f5f4ed", fontFamily: "Arial, sans-serif" }}>
@@ -628,8 +715,9 @@ const PromoComposition = ({
             width: "100%",
             height: "100%",
             objectFit: "cover",
-            opacity: visualType === "cinematic" ? 0.72 : 0.54,
-            scale: 1.04 + Math.sin(frame / (fps * 4)) * 0.025,
+            opacity: visualType === "cinematic" ? 0.5 : 0.34,
+            translate: `${cameraPanX * 1.15}% ${cameraPanY * 1.15}%`,
+            scale: cameraScale + 0.025,
           }}
         />
       ) : null}
@@ -643,8 +731,9 @@ const PromoComposition = ({
             width: "100%",
             height: "100%",
             objectFit: "cover",
-            opacity: 0.58,
-            scale: 1.04 + Math.sin(frame / (fps * 4)) * 0.025,
+            opacity: 0.32,
+            translate: `${cameraPanX * 1.15}% ${cameraPanY * 1.15}%`,
+            scale: cameraScale + 0.025,
           }}
         />
       ) : null}
@@ -656,8 +745,10 @@ const PromoComposition = ({
           width: "100%",
           height: "100%",
           objectFit: "cover",
-          opacity: sceneOpacity * 0.78,
-          scale: 1.08 - interpolate(sceneFrame, [0, sceneDuration], [0, 0.08], { extrapolateRight: "clamp" }),
+          opacity: sceneOpacity * 0.96,
+          translate: `${cameraPanX * 0.68}% ${cameraPanY * 0.68}%`,
+          scale: cameraScale + 0.02,
+          rotate: `${cameraTilt}deg`,
         }}
         />
       ) : null}
@@ -677,13 +768,19 @@ const PromoComposition = ({
               width: "100%",
               height: "100%",
               objectFit: "cover",
-              opacity: sceneOpacity * 0.72,
-              scale: 1.08 - interpolate(sceneFrame, [0, sceneDuration], [0, 0.08], { extrapolateRight: "clamp" }),
+              opacity: sceneOpacity * 0.9,
+              translate: `${cameraPanX * 0.68}% ${cameraPanY * 0.68}%`,
+              scale: cameraScale + 0.02,
+              rotate: `${cameraTilt}deg`,
             }}
           />
         </Sequence>
       ) : null}
-      <AbsoluteFill style={{ background: styleTreatment }} />
+      <AbsoluteFill
+        style={{
+          background: `radial-gradient(ellipse at ${62 + cameraPanX * 2}% ${40 + cameraPanY * 2}%, ${sceneAtmosphere}45, transparent 62%), ${styleTreatment}`,
+        }}
+      />
       {currentScene ? (
         <SceneMotionGraphics
           style={motionStyle}
@@ -712,6 +809,8 @@ const PromoComposition = ({
           border: `1px solid ${accent}45`,
           boxShadow: `0 0 0 34px ${accent}08, 0 0 0 92px ${accent}05`,
           opacity: 0.7,
+          translate: `${cameraPanX * -1}% ${cameraPanY}%`,
+          rotate: `${sceneProgress * (sceneIndex % 2 === 0 ? 8 : -8)}deg`,
           pointerEvents: "none",
         }}
       />
@@ -725,6 +824,7 @@ const PromoComposition = ({
           borderRadius: "50%",
           background: `radial-gradient(circle, ${accent}20, transparent 68%)`,
           opacity: 0.8,
+          translate: `${cameraPanX}% ${cameraPanY * -1}%`,
           pointerEvents: "none",
         }}
       />
@@ -790,10 +890,10 @@ const PromoComposition = ({
             objectPosition: "bottom",
             filter: "drop-shadow(0 18px 36px rgba(0,0,0,.4))",
             opacity: interpolate(sceneFrame, [0, enterFrames], [0, 1], { extrapolateRight: "clamp" }),
-            translate: `${interpolate(characterEntranceProgress, [0, 1], [characterEntranceX, 0])}px ${interpolate(characterEntranceProgress, [0, 1], [characterEntranceY, 0]) + idleMotion * (isSpeaking ? 15 : 8)}px`,
-            rotate: `${Math.sin((frame / fps) * (isSpeaking ? 5.2 : 1.7)) * (isSpeaking ? 2.2 : 1)}deg`,
+            translate: `${interpolate(characterEntranceProgress, [0, 1], [characterEntranceX, 0]) + characterSway * (isActing ? 13 : 7)}px ${interpolate(characterEntranceProgress, [0, 1], [characterEntranceY, 0]) + idleMotion * (isActing ? 18 : 12)}px`,
+            rotate: `${characterSway * (isActing ? 3 : 1.8)}deg`,
             scale: interpolate(characterEntranceProgress, [0, 1], [characterStartScale, 1]) +
-              Math.sin((frame / fps) * (isSpeaking ? 8 : 2.1)) * (isSpeaking ? 0.018 : 0.009),
+              Math.sin((sceneFrame / fps) * 3.2 + Math.max(0, sceneIndex)) * (isActing ? 0.024 : 0.014),
           }}
         />
       ) : (
@@ -803,10 +903,10 @@ const PromoComposition = ({
             ...resolvedCharacterPosition,
             zIndex: 2,
             opacity: sceneOpacity,
-            translate: `${interpolate(characterEntranceProgress, [0, 1], [characterEntranceX, 0])}px ${interpolate(characterEntranceProgress, [0, 1], [characterEntranceY, 0]) + idleMotion * (isSpeaking ? 18 : 10)}px`,
-            rotate: `${Math.sin((frame / fps) * (isSpeaking ? 5.2 : 1.7)) * (isSpeaking ? 2.2 : 1)}deg`,
+            translate: `${interpolate(characterEntranceProgress, [0, 1], [characterEntranceX, 0]) + characterSway * (isActing ? 16 : 9)}px ${interpolate(characterEntranceProgress, [0, 1], [characterEntranceY, 0]) + idleMotion * (isActing ? 22 : 14)}px`,
+            rotate: `${characterSway * (isActing ? 3.4 : 2)}deg`,
             scale: interpolate(characterEntranceProgress, [0, 1], [characterStartScale, 1]) +
-              Math.sin((frame / fps) * (isSpeaking ? 8 : 2.1)) * (isSpeaking ? 0.018 : 0.009),
+              Math.sin((sceneFrame / fps) * 3.2 + Math.max(0, sceneIndex)) * (isActing ? 0.03 : 0.018),
           }}
         >
           <svg viewBox="0 0 360 460" width="100%" height="100%" role="img" aria-label={`${characterName || "Framefolk"} talking character`}>
@@ -841,62 +941,31 @@ const PromoComposition = ({
           </svg>
         </div>
       )}
-      {speechCaptionWords.length > 0 ? (
+      {visibleSubtitle ? (
         <div
           style={{
             position: "absolute",
             zIndex: 4,
-            left: "8%",
-            right: "8%",
-            bottom: "13%",
+            left: "10%",
+            right: "10%",
+            bottom: "12%",
             display: "flex",
-            alignItems: "center",
-            gap: 18,
-            minHeight: 92,
-            padding: "20px 26px",
-            border: `1px solid ${accent}75`,
-            borderRadius: 22,
-            background: "rgba(12,15,12,.88)",
-            boxShadow: "0 18px 50px #0006",
+            justifyContent: "center",
+            minHeight: 0,
+            padding: "12px 20px",
+            border: `1px solid ${accent}65`,
+            borderRadius: 16,
+            background: "rgba(12,15,12,.92)",
+            boxShadow: "0 12px 32px #0006",
             color: "#fff",
-            fontSize: "clamp(25px, 4vw, 48px)",
-            fontWeight: 700,
-            lineHeight: 1.12,
+            fontSize: "clamp(22px, 3.6vw, 42px)",
+            fontWeight: 650,
+            lineHeight: 1.2,
             textWrap: "balance",
+            textAlign: "center",
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", gap: 5, flex: "0 0 auto", height: 34 }}>
-            {[0, 1, 2, 3].map((bar) => (
-              <span
-                key={bar}
-                style={{
-                  width: 5,
-                  height: `${10 + Math.abs(Math.sin(frame * 0.42 + bar * 1.4)) * (isSpeaking ? 22 : 6)}px`,
-                  borderRadius: 5,
-                  background: accent,
-                }}
-              />
-            ))}
-          </div>
-          <span>
-            {speechCaptionWords.map((word, index) => {
-              const wordIndex = captionStart + index;
-              return (
-                <React.Fragment key={`${wordIndex}-${word}`}>
-                  <span
-                    style={{
-                      color: wordIndex === spokenWordIndex ? accent : "#fff",
-                      textDecoration: wordIndex === spokenWordIndex ? "underline" : "none",
-                      textUnderlineOffset: 6,
-                    }}
-                  >
-                    {word}
-                  </span>
-                  {index < speechCaptionWords.length - 1 ? " " : ""}
-                </React.Fragment>
-              );
-            })}
-          </span>
+          <span>{visibleSubtitle}</span>
         </div>
       ) : null}
       <AbsoluteFill
@@ -916,6 +985,27 @@ const PromoComposition = ({
           </div>
           <span style={{ color: accent, fontSize: 18 }}>{sceneIndex >= 0 ? `${String(sceneIndex + 1).padStart(2, "0")} / ${String(scenes.length).padStart(2, "0")}` : ""}</span>
         </div>
+        {currentScene?.visualAttribution ? (
+          <div
+            style={{
+              position: "absolute",
+              top: isPortrait ? "11%" : "14%",
+              right: isPortrait ? "7%" : "8%",
+              maxWidth: "55%",
+              overflow: "hidden",
+              padding: "6px 10px",
+              borderRadius: 999,
+              backgroundColor: "#101310d9",
+              color: "#f5f4ed",
+              fontSize: "clamp(10px, 1vw, 15px)",
+              letterSpacing: 0,
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {currentScene.visualAttribution}
+          </div>
+        ) : null}
 
         <div
           style={{
